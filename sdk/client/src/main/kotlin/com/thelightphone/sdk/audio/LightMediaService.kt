@@ -9,6 +9,8 @@ import android.content.pm.ServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.PowerManager
+import android.provider.Settings
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -26,6 +28,7 @@ class LightMediaService : MediaSessionService() {
         private const val CHANNEL_ID = "light_audio_channel"
         private const val NOTIFICATION_ID = 1001
         private var activeSession: MediaSession? = null
+        private var instance: LightMediaService? = null
         private var wifiLock: WifiManager.WifiLock? = null
         private var wakeLock: PowerManager.WakeLock? = null
 
@@ -35,24 +38,93 @@ class LightMediaService : MediaSessionService() {
          */
         fun setActiveSession(session: MediaSession?) {
             activeSession = session
+            instance?.attachToSession()
+        }
+
+        /**
+         * Opens the system Bluetooth settings. The platform server's
+         * OpenBluetoothSettings bridge isn't implemented on every device, so
+         * the service (which holds Context in the tool's process) launches
+         * the settings activity directly.
+         */
+        fun openBluetoothSettings() {
+            instance?.let { service ->
+                runCatching {
+                    service.startActivity(
+                        Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                }
+            }
         }
     }
 
+    private var attachedPlayer: Player? = null
+    private var playerListener: Player.Listener? = null
+
     override fun onCreate() {
         super.onCreate()
+        instance = this
         createNotificationChannel()
-        acquireLocks()
         startForegroundServiceWithNotification()
+        attachToSession()
+        LightBluetooth.observe(this)
+        LightVolume.observe(this)
+    }
+
+    /**
+     * (Re)attaches to the active session's player and re-evaluates lock state.
+     * The wake/wifi locks are held ONLY while the player actually intends to
+     * play (playing or buffering), and released as soon as it pauses, stops,
+     * or the session detaches — otherwise a paused player keeps the device
+     * awake indefinitely.
+     */
+    private fun attachToSession() {
+        val player = activeSession?.player
+        if (player !== attachedPlayer) {
+            playerListener?.let { attachedPlayer?.removeListener(it) }
+            attachedPlayer = player
+            playerListener = player?.let { p ->
+                object : Player.Listener {
+                    override fun onEvents(player: Player, events: Player.Events) {
+                        updateLocks(player)
+                    }
+                }.also { p.addListener(it) }
+            }
+        }
+        updateLocks(player)
+        if (player == null) {
+            stopSelf()
+        }
+    }
+
+    private fun updateLocks(player: Player?) {
+        val shouldHold = player != null && player.playWhenReady &&
+            (player.playbackState == Player.STATE_READY || player.playbackState == Player.STATE_BUFFERING)
+        if (shouldHold) {
+            acquireLocks()
+        } else {
+            releaseLocks()
+        }
     }
 
     private fun acquireLocks() {
-        val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-        wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "LightRadio:WifiLock")
-        wifiLock?.acquire()
+        if (wakeLock == null) {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LightRadio:WakeLock")
+        }
+        wakeLock?.let { if (!it.isHeld) it.acquire() }
 
-        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LightRadio:WakeLock")
-        wakeLock?.acquire()
+        if (wifiLock == null) {
+            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "LightRadio:WifiLock")
+        }
+        wifiLock?.let { if (!it.isHeld) it.acquire() }
+    }
+
+    private fun releaseLocks() {
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wifiLock?.let { if (it.isHeld) it.release() }
     }
 
     private fun startForegroundServiceWithNotification() {
@@ -109,9 +181,14 @@ class LightMediaService : MediaSessionService() {
     }
 
     override fun onDestroy() {
-        wifiLock?.let { if (it.isHeld) it.release() }
-        wakeLock?.let { if (it.isHeld) it.release() }
+        playerListener?.let { attachedPlayer?.removeListener(it) }
+        attachedPlayer = null
+        playerListener = null
+        releaseLocks()
+        wifiLock = null
+        wakeLock = null
         activeSession = null
+        instance = null
         super.onDestroy()
     }
 }

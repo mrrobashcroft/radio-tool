@@ -16,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.thelightphone.sdk.LightScreen
 import com.thelightphone.sdk.LightViewModel
@@ -48,7 +49,7 @@ enum class LibraryTab {
 /**
  * logic for managing the local station library.
  */
-class LibraryViewModel(private val filesDir: File) : LightViewModel<Station?>() {
+class LibraryViewModel(private val filesDir: File) : RadioBaseViewModel<Station?>() {
     private val stationsFile = File(filesDir, "stations.json")
     private val recentPlayedFile = File(filesDir, "recent_played.json")
     
@@ -65,6 +66,7 @@ class LibraryViewModel(private val filesDir: File) : LightViewModel<Station?>() 
     }
 
     override fun onScreenShow(screen: SimpleLightScreen<Station?>) {
+        super.onScreenShow(screen)
         currentScreen = screen
     }
 
@@ -147,14 +149,16 @@ class LibraryScreen(private val sealedActivity: SealedLightActivity) : LightScre
         val favourites by viewModel.favourites.collectAsState()
         val recent by viewModel.recent.collectAsState()
         val activeTab by viewModel.activeTab.collectAsState()
+        val volumePanel by viewModel.volumePanel.collectAsState()
 
         LightTheme(colors = LightThemeColors.Dark) {
             val colors = LightThemeTokens.colors
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(colors.background)
-            ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(colors.background)
+                ) {
                 // Header
                 LightTopBar(
                     leftButton = LightBarButton.LightIcon(LightIcons.BACK, onClick = { goBack() }),
@@ -175,20 +179,22 @@ class LibraryScreen(private val sealedActivity: SealedLightActivity) : LightScre
                             .lightClickable { viewModel.setActiveTab(LibraryTab.Favourites) },
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        LightText(
-                            text = "Favourites",
-                            variant = LightTextVariant.Subheading,
-                            lighten = activeTab != LibraryTab.Favourites
-                        )
-                        // Underline indicator for active tab
-                        if (activeTab == LibraryTab.Favourites) {
-                            Box(
-                                modifier = Modifier
-                                    .padding(top = 4.dp)
-                                    .fillMaxWidth(0.6f)
-                                    .height(2.dp)
-                                    .background(colors.content)
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            LightText(
+                                text = "Favourites",
+                                variant = LightTextVariant.Subheading,
+                                lighten = activeTab != LibraryTab.Favourites
                             )
+                            // Underline indicator for the active tab — hugs the label
+                            if (activeTab == LibraryTab.Favourites) {
+                                Box(
+                                    modifier = Modifier
+                                        .padding(top = 4.dp)
+                                        .fillMaxWidth()
+                                        .height(2.dp)
+                                        .background(colors.content)
+                                )
+                            }
                         }
                     }
 
@@ -199,20 +205,22 @@ class LibraryScreen(private val sealedActivity: SealedLightActivity) : LightScre
                             .lightClickable { viewModel.setActiveTab(LibraryTab.Recent) },
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        LightText(
-                            text = "Recent",
-                            variant = LightTextVariant.Subheading,
-                            lighten = activeTab != LibraryTab.Recent
-                        )
-                        // Underline indicator for active tab
-                        if (activeTab == LibraryTab.Recent) {
-                            Box(
-                                modifier = Modifier
-                                    .padding(top = 4.dp)
-                                    .fillMaxWidth(0.6f)
-                                    .height(2.dp)
-                                    .background(colors.content)
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            LightText(
+                                text = "Recent",
+                                variant = LightTextVariant.Subheading,
+                                lighten = activeTab != LibraryTab.Recent
                             )
+                            // Underline indicator for the active tab — hugs the label
+                            if (activeTab == LibraryTab.Recent) {
+                                Box(
+                                    modifier = Modifier
+                                        .padding(top = 4.dp)
+                                        .fillMaxWidth()
+                                        .height(2.dp)
+                                        .background(colors.content)
+                                )
+                            }
                         }
                     }
                 }
@@ -235,7 +243,8 @@ class LibraryScreen(private val sealedActivity: SealedLightActivity) : LightScre
                         )
                     }
                 } else {
-                    LightScrollView(modifier = Modifier.weight(1f).padding(horizontal = 24.dp)) {
+                    // Scrollbar flush right — rows carry their own side padding
+                    LightScrollView(modifier = Modifier.weight(1f)) {
                         Column {
                             currentList.forEach { station ->
                                 StationRow(
@@ -247,6 +256,13 @@ class LibraryScreen(private val sealedActivity: SealedLightActivity) : LightScre
                         }
                     }
                 }
+            }
+
+                // Full-screen overlay on top of everything (visual replica — not interactive)
+                VolumePanelOverlay(
+                    state = volumePanel,
+                    onDismiss = { viewModel.dismissVolumePanel() },
+                )
             }
         }
     }
@@ -264,16 +280,22 @@ class LibraryScreen(private val sealedActivity: SealedLightActivity) : LightScre
                 modifier = Modifier
                     .weight(1f)
                     .lightClickable(onClick = onPlay)
+                    .padding(start = 24.dp, end = 16.dp)
             ) {
-                LightText(text = station.name, variant = LightTextVariant.Copy)
+                LightText(
+                    text = station.name,
+                    variant = LightTextVariant.Copy,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
                 LightText(text = station.url, variant = LightTextVariant.Fine, lighten = true, maxLines = 1)
             }
             
-            // Delete button
+            // Delete button — flush right
             Box(
                 modifier = Modifier
-                    .padding(start = 16.dp)
                     .lightClickable(onClick = onDelete)
+                    .padding(end = 8.dp)
             ) {
                 com.thelightphone.sdk.ui.LightIcon(
                     icon = LightIcons.CLOSE,
@@ -295,7 +317,6 @@ private fun PreviewLibraryScreen() {
                 .background(LightThemeColors.Dark.background)
         ) {
                 LightTopBar(
-                    leftButton = LightBarButton.LightIcon(LightIcons.BACK, onClick = {}),
                     center = LightTopBarCenter.Text("Library"),
                 )
 

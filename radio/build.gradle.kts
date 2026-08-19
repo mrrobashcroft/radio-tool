@@ -58,7 +58,12 @@ kotlin {
 }
 
 dependencies {
-    implementation(project(":sdk:client"))
+    implementation(project(":sdk:client")) {
+        // sdk:ui's QR scanner (CameraX + ML Kit barcode) is unused by the
+        // radio tool — drop its native libs from the release (barhopper etc.)
+        exclude(group = "com.google.mlkit")
+        exclude(group = "androidx.camera")
+    }
     implementation(libs.androidx.media3.common)
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.exoplayer.hls)

@@ -24,6 +24,11 @@ object ManifestGenerator {
             permissions.add("android.permission.FOREGROUND_SERVICE")
             permissions.add("android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK")
         }
+        // A capability declares what the tool does and the permissions it needs
+        // follow from that, so they are unioned in here rather than written by the tool.
+        metadata.capabilities.flatMap {
+            LightToolPolicy.CAPABILITY_IMPLIED_PERMISSIONS[it].orEmpty()
+        }.forEach { permissions.add(it) }
         
         for (perm in permissions) {
             appendLine("""    <uses-permission android:name="${xmlAttr(perm)}" />""")
@@ -54,6 +59,27 @@ object ManifestGenerator {
             |        </service>"""
         } else ""
 
+        // Only tools that opted in declare the audio service. Shipping it in the
+        // SDK library manifest would put a mediaPlayback claim in every tool.
+        val capabilityMarkers = metadata.capabilities.flatMap { capability ->
+            listOf(
+                """        <meta-data""",
+                """            android:name="${xmlAttr(LightToolPolicy.capabilityMarker(capability))}"""",
+                """            android:value="true" />""",
+            )
+        }.joinToString("") { "\n            |$it" }
+
+        val detachedAudioService = if (LightToolPolicy.DETACHED_AUDIO !in metadata.capabilities) "" else
+            """
+            |        <service
+            |            android:name="com.thelightphone.sdk.audio.LightAudioService"
+            |            android:foregroundServiceType="mediaPlayback"
+            |            android:exported="false">
+            |            <intent-filter>
+            |                <action android:name="androidx.media3.session.MediaSessionService" />
+            |            </intent-filter>
+            |        </service>"""
+
         appendLine(
             """
             |    <application
@@ -64,7 +90,7 @@ object ManifestGenerator {
             |        android:theme="@style/LightSdk.Theme.Splash">
             |        <meta-data
             |            android:name="com.thelightphone.sdk.LIGHT_SERVER_PACKAGE"
-            |            android:value="${xmlAttr(metadata.serverPackage)}" />
+            |            android:value="${xmlAttr(metadata.serverPackage)}" />$capabilityMarkers
             |        <activity
             |            android:name="com.thelightphone.sdk.LightActivity"
             |            android:launchMode="singleTask"$screenOrientation
@@ -85,7 +111,7 @@ object ManifestGenerator {
             |            <meta-data
             |                android:name="com.thelightphone.sdk.SDK_VERSION"
             |                android:value="${'$'}{sdkVersion}" />
-            |        </receiver>$backgroundService
+            |        </receiver>$backgroundService$detachedAudioService
             |    </application>
             |    <queries>
             |        <intent>

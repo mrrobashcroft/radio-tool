@@ -25,6 +25,7 @@ import com.thelightphone.sdk.SealedLightActivity
 import com.thelightphone.sdk.SimpleLightScreen
 import com.thelightphone.sdk.audio.DefaultLightAudio
 import com.thelightphone.sdk.audio.LightAudioItem
+import com.thelightphone.sdk.audio.LightAudioPlayback
 import com.thelightphone.sdk.audio.LightAudioPlayer
 import com.thelightphone.sdk.audio.LightAudioSource
 import com.thelightphone.sdk.audio.LightMediaMetadata
@@ -65,10 +66,14 @@ data class Station(val name: String, val url: String)
 class RadioViewModel(
     filesDir: File,
     private val sealedActivity: SealedLightActivity
-) : LightViewModel<Unit>() {
-    // SDK provided audio player wrapper
+) : RadioBaseViewModel<Unit>() {
+    // SDK provided audio player wrapper. Detached: the player lives in the
+    // SDK's LightAudioService, so playback survives the tool losing foreground
+    // and every tool instance shares one session — Bluetooth/media-button
+    // controls always action the station that's actually playing, and there is
+    // never a second, stale player.
     private val audio = DefaultLightAudio(sealedActivity)
-    private val player: LightAudioPlayer = audio.newPlayer()
+    private val player: LightAudioPlayer = audio.newPlayer(playback = LightAudioPlayback.Detached)
     
     // File paths for local persistence
     private val stationsFile = File(filesDir, "stations.json")
@@ -76,10 +81,13 @@ class RadioViewModel(
     private val lastPlayedFile = File(filesDir, "last_played.json")
 
     private var currentScreen: SimpleLightScreen<Unit>? = null
+
+    /** Whether a real station is loaded (false on the fresh-install default). */
+    private var hasStation = false
     
     // Observable state for the UI
     val streamUrl = MutableStateFlow("https://stream.radiokps.nz/")
-    val stationName = MutableStateFlow("Radio")
+    val stationName = MutableStateFlow("No Station Selected")
     val stations = MutableStateFlow<List<Station>>(emptyList())
     val recentStations = MutableStateFlow<List<Station>>(emptyList())
     
@@ -87,6 +95,8 @@ class RadioViewModel(
     val isPlaying = player.isPlaying
     val playbackState = player.playbackState
     val error = player.error
+    val mediaMetadata = player.mediaMetadata
+    val bluetoothConnected = com.thelightphone.sdk.audio.LightBluetooth.connected
     val isFavourite = MutableStateFlow(false)
 
     init {
@@ -98,6 +108,7 @@ class RadioViewModel(
     }
 
     override fun onScreenShow(screen: SimpleLightScreen<Unit>) {
+        super.onScreenShow(screen)
         currentScreen = screen
         // Reload stations and recent list whenever returning to home to stay in sync with Library
         loadStations()
@@ -142,6 +153,7 @@ class RadioViewModel(
                 val station = Json.decodeFromString<Station>(json)
                 stationName.value = station.name
                 streamUrl.value = sanitizeUrl(station.url)
+                hasStation = true
             } catch (e: Exception) {
                 android.util.Log.e("RadioViewModel", "Failed to load last played", e)
             }
@@ -190,7 +202,7 @@ class RadioViewModel(
     fun togglePlayback() {
         if (isPlaying.value) {
             player.stop()
-        } else {
+        } else if (hasStation) {
             val sanitizedUrl = sanitizeUrl(streamUrl.value)
             val station = Station(stationName.value, sanitizedUrl)
             val item = LightAudioItem(
@@ -203,6 +215,7 @@ class RadioViewModel(
             addToRecent(station)
             updateFavouriteState()
         }
+        // No station selected — pressing play does nothing (nothing to connect to)
     }
 
     /** Adds or removes the current station from the user's curated Favorites list. */
@@ -228,6 +241,7 @@ class RadioViewModel(
     fun playStation(station: Station) {
         val sanitizedUrl = sanitizeUrl(station.url)
         val sanitizedStation = Station(station.name, sanitizedUrl)
+        hasStation = true
         
         android.util.Log.d("RadioViewModel", "Playing: ${station.name} | URL: $sanitizedUrl")
         stationName.value = station.name
@@ -341,20 +355,12 @@ class RadioViewModel(
         saveLastPlayed()
     }
 
-    fun openAddStation() {
-        currentScreen?.navigateTo({ AddStationUrlScreen(it) }) { selectedStation ->
-            selectedStation?.let {
-                playStation(it)
-            }
-        }
-    }
-
     fun openBluetooth() {
-        viewModelScope.launch {
-            // This relies on the LightOS server implementing this custom bridge method.
-            // On early SDK builds for physical hardware, this may not trigger an action yet.
-            callRemoteServiceMethod(LightServiceMethod.OpenBluetoothSettings, Unit)
-        }
+        // Launch through the SDK's transparent bridge activity: the tool's
+        // foreground activity starts it, and it opens the system Bluetooth
+        // settings. (The old static LightMediaService path no-op'd when the
+        // service instance was null.)
+        currentScreen?.openBluetoothSettings()
     }
 
     override fun onBackPressed(): Boolean {
@@ -363,7 +369,9 @@ class RadioViewModel(
     }
 
     override fun onCleared() {
-        // Clean up resources when the app is fully closed
+        // Releases the detached handle only — playback continues in
+        // LightAudioService until stopped or the service's idle rule fires,
+        // so background listening survives the tool closing.
         player.release()
         super.onCleared()
     }
@@ -388,6 +396,9 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
         val state by viewModel.playbackState.collectAsState()
         val error by viewModel.error.collectAsState()
         val isFavourite by viewModel.isFavourite.collectAsState()
+        val mediaMetadata by viewModel.mediaMetadata.collectAsState()
+        val bluetoothConnected by viewModel.bluetoothConnected.collectAsState()
+        val volumePanel by viewModel.volumePanel.collectAsState()
         val themeColors by LightThemeController.colors.collectAsState()
 
         // Derive user-friendly status text from ExoPlayer states
@@ -401,14 +412,14 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
         // Apply the standard Light Phone theme (follows system-wide Light/Dark mode)
         LightTheme(colors = themeColors) {
             val colors = LightThemeTokens.colors
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(colors.background)
-            ) {
-                // Top Bar with standard back button and tool title
+            Box(modifier = Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(colors.background)
+                ) {
+                // Top bar: title only — the tool button (KEYCODE_HOME) minimizes
                 LightTopBar(
-                    leftButton = LightBarButton.LightIcon(LightIcons.BACK, onClick = { minimize() }),
                     center = LightTopBarCenter.Text("Radio")
                 )
 
@@ -425,10 +436,10 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(bottom = 16.dp),
+                            .padding(bottom = 8.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        LightText(
+                        MarqueeText(
                             text = name,
                             variant = LightTextVariant.Heading,
                             align = TextAlign.Center,
@@ -449,12 +460,32 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
                         }
                     }
 
+                    // Current track (stream metadata) when it differs from the station name
+                    val nowPlaying = mediaMetadata?.let { meta ->
+                        if (meta.title.isNotBlank() && meta.title != name) {
+                            listOfNotNull(meta.title, meta.artist).joinToString(" — ")
+                        } else {
+                            null
+                        }
+                    }
+                    if (nowPlaying != null) {
+                        MarqueeText(
+                            text = nowPlaying,
+                            variant = LightTextVariant.Subheading,
+                            lighten = true,
+                            align = TextAlign.Center,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 24.dp)
+                        )
+                    }
+
                     // Playback Status Indicator
                     LightText(
                         text = statusText,
                         variant = LightTextVariant.Detail,
                         lighten = true,
-                        modifier = Modifier.padding(bottom = 32.dp)
+                        modifier = Modifier.padding(top = 16.dp, bottom = 32.dp)
                     )
 
                     // Large Center Play/Stop Button
@@ -470,14 +501,24 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
                     }
                 }
 
-                // Standard LightOS Bottom Navigation Bar
+                // Standard LightOS Bottom Navigation Bar (search + URL share one screen)
                 LightBottomBar(
                     items = listOf(
                         LightBarButton.LightIcon(LightIcons.SEARCH, onClick = viewModel::openSearch),
-                        LightBarButton.LightIcon(LightIcons.ADD, onClick = viewModel::openAddStation),
                         LightBarButton.LightIcon(LightIcons.LIST, onClick = viewModel::openLibrary),
-                        LightBarButton.LightIcon(LightIcons.BLUETOOTH, onClick = viewModel::openBluetooth)
+                        LightBarButton.LightIcon(
+                            icon = if (bluetoothConnected) LightIcons.BLUETOOTH_CONNECTED else LightIcons.BLUETOOTH,
+                            onClick = viewModel::openBluetooth,
+                            contentDescription = if (bluetoothConnected) "Bluetooth connected" else "Bluetooth settings"
+                        )
                     )
+                )
+                }
+
+                // Full-screen overlay on top of everything (visual replica — not interactive)
+                VolumePanelOverlay(
+                    state = volumePanel,
+                    onDismiss = { viewModel.dismissVolumePanel() },
                 )
             }
         }
@@ -508,11 +549,6 @@ private fun PreviewContent() {
             .fillMaxSize()
             .background(colors.background)
     ) {
-        LightTopBar(
-            leftButton = LightBarButton.LightIcon(LightIcons.BACK, onClick = {}),
-            center = LightTopBarCenter.Text("Radio")
-        )
-
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -557,7 +593,6 @@ private fun PreviewContent() {
         LightBottomBar(
             items = listOf(
                 LightBarButton.LightIcon(LightIcons.SEARCH, onClick = {}),
-                LightBarButton.LightIcon(LightIcons.ADD, onClick = {}),
                 LightBarButton.LightIcon(LightIcons.LIST, onClick = {}),
                 LightBarButton.LightIcon(LightIcons.BLUETOOTH, onClick = {})
             )

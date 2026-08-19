@@ -70,6 +70,10 @@ object LightIcons {
         name = "bluetooth",
         drawableResource = R.drawable.ic_bluetooth_white,
     )
+    object BLUETOOTH_CONNECTED : LightIconConfiguration(
+        name = "bluetooth connected",
+        drawableResource = R.drawable.ic_bluetooth_connected_white,
+    )
     object CALL : LightIconConfiguration(
         name = "call",
         drawableResource = R.drawable.ic_call_white,

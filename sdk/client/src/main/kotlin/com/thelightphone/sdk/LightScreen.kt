@@ -54,6 +54,22 @@ abstract class SimpleLightScreen<ResultType>(sealedActivity: SealedLightActivity
     fun minimize() {
         activity.moveTaskToBack(true)
     }
+
+    /**
+     * Opens the system Bluetooth settings through the SDK's transparent bridge
+     * activity. Tools cannot call startActivity directly (the SDK plugin
+     * forbids it); this is the sanctioned path.
+     */
+    fun openBluetoothSettings() {
+        runCatching {
+            activity.startActivity(
+                android.content.Intent(
+                    activity,
+                    com.thelightphone.sdk.audio.BluetoothSettingsActivity::class.java
+                )
+            )
+        }
+    }
 }
 
 abstract class LightScreen<ResultType, VM : LightViewModel<ResultType>>(

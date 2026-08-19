@@ -8,6 +8,13 @@
             android:name="com.thelightphone.sdk.LightFileProvider"
             android:authorities="${applicationId}.lightfiles"
             android:exported="true" />
+        <!-- Transparent bridge to the system Bluetooth settings; started by a
+             tool's Bluetooth bar button (SimpleLightScreen.openBluetoothSettings). -->
+        <activity
+            android:name="com.thelightphone.sdk.audio.BluetoothSettingsActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <service android:name="com.thelightphone.sdk.LightPushService"
             android:exported="false">
             <intent-filter>

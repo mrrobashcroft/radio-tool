@@ -93,6 +93,11 @@ class LightActivity internal constructor() : ComponentActivity() {
         }
         super.onCreate(savedInstanceState)
 
+        // While this tool is foreground the rocker always adjusts media
+        // volume — never the ringer (Android routes the rocker to the ringer
+        // when no audio is playing, which is wrong for a radio tool).
+        setVolumeControlStream(android.media.AudioManager.STREAM_MUSIC)
+
         WindowCompat.setDecorFitsSystemWindows(window, false)
         val controller = WindowInsetsControllerCompat(window, window.decorView)
         controller.hide(WindowInsetsCompat.Type.systemBars())
@@ -224,6 +229,16 @@ class LightActivity internal constructor() : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         currentScreen.value?.screen?.notifyWillShow()
+    }
+
+    override fun onDestroy() {
+        // The tool may be finished without a goBack (LightOS finishing the
+        // activity when the tool is backgrounded), which would otherwise leak
+        // every screen's ViewModelStore — and with it any process-lifetime
+        // resources the VMs hold (e.g. a detached audio handle). Clear every
+        // store so onCleared always runs.
+        backStack.forEach { it.viewModelStoreOwner.viewModelStore.clear() }
+        super.onDestroy()
     }
 }
 
