@@ -3,20 +3,17 @@ package com.thelightphone.radio
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewModelScope
 import com.thelightphone.sdk.LightScreen
@@ -52,7 +49,6 @@ import kotlinx.serialization.json.Json
 
 /**
  * Data model for the Radio Browser API response.
- * Maps JSON fields from the API to Kotlin properties.
  */
 @Serializable
 data class RadioBrowserStation(
@@ -69,21 +65,16 @@ data class RadioBrowserStation(
  * logic for searching stations via the Radio Browser community API.
  */
 class SearchViewModel : LightViewModel<Station?>() {
-    // Ktor HTTP client for network requests
     private val client = HttpClient(OkHttp) {
         install(ContentNegotiation) {
-            json(Json { 
-                ignoreUnknownKeys = true 
-            })
+            json(Json { ignoreUnknownKeys = true })
         }
-        // Identifying our tool to the API servers
         install(DefaultRequest) {
             header("User-Agent", "LightPhoneRadioTool/1.0")
         }
     }
 
     private var currentScreen: SimpleLightScreen<Station?>? = null
-    val query = MutableStateFlow("")
     val results = MutableStateFlow<List<RadioBrowserStation>>(emptyList())
     val isSearching = MutableStateFlow(false)
 
@@ -91,30 +82,22 @@ class SearchViewModel : LightViewModel<Station?>() {
         currentScreen = screen
     }
 
-    fun updateQuery(newQuery: String) {
-        query.value = newQuery
-    }
-
     /**
      * Executes the search against the Radio Browser API.
-     * Uses a specific mirror (de1) for reliability and limits results to 50.
      */
-    fun search() {
-        val name = query.value.trim()
+    fun search(query: String) {
+        val name = query.trim()
         if (name.length < 2) return
         
         viewModelScope.launch {
             isSearching.value = true
             try {
-                // Radio Browser allows searching by name, tags, and country.
-                // We use hidebroken=true to ensure we only get active streams.
                 val encodedName = java.net.URLEncoder.encode(name, "UTF-8")
                 val url = "https://de1.api.radio-browser.info/json/stations/search?name=$encodedName&limit=50&hidebroken=true&order=clickcount&reverse=true"
                 
                 android.util.Log.d("SearchViewModel", "Searching: $url")
                 
                 val response: List<RadioBrowserStation> = client.get(url).body()
-                android.util.Log.d("SearchViewModel", "Search results for '$name': ${response.size}")
                 results.value = response
             } catch (e: Exception) {
                 android.util.Log.e("SearchViewModel", "Search failed for '$name'", e)
@@ -127,31 +110,40 @@ class SearchViewModel : LightViewModel<Station?>() {
 
     /** Returns the selected station metadata back to the HomeScreen. */
     fun selectStation(station: RadioBrowserStation) {
-        val streamUrl = station.urlResolved?.takeIf { it.isNotBlank() } ?: station.url
-        android.util.Log.d("SearchViewModel", "Selected: ${station.name} | URL: $streamUrl | Codec: ${station.codec}")
+        // Prioritize the original URL if urlResolved looks truncated or suspicious
+        val streamUrl = if (station.urlResolved?.contains(".") == true && !station.urlResolved.endsWith(".")) {
+            station.urlResolved
+        } else {
+            station.url
+        }
         currentScreen?.goBack(Station(station.name, streamUrl))
     }
 
     override fun onCleared() {
-        // Ensure network client is closed
         client.close()
         super.onCleared()
     }
 }
 
 /**
- * Screen for discovering new radio stations via an online directory.
+ * Screen for displaying radio station search results.
  */
-class SearchScreen(private val sealedActivity: SealedLightActivity) : LightScreen<Station?, SearchViewModel>(sealedActivity) {
+class SearchScreen(
+    private val sealedActivity: SealedLightActivity,
+    private val query: String
+) : LightScreen<Station?, SearchViewModel>(sealedActivity) {
     override val viewModelClass = SearchViewModel::class.java
     override fun createViewModel() = SearchViewModel()
 
     @Composable
     override fun Content() {
-        val query by viewModel.query.collectAsState()
         val results by viewModel.results.collectAsState()
         val searching by viewModel.isSearching.collectAsState()
-        val focusManager = LocalFocusManager.current
+
+        // Trigger search once when the screen is first shown
+        LaunchedEffect(query) {
+            viewModel.search(query)
+        }
 
         LightTheme(colors = LightThemeColors.Dark) {
             val colors = LightThemeTokens.colors
@@ -160,52 +152,27 @@ class SearchScreen(private val sealedActivity: SealedLightActivity) : LightScree
                     .fillMaxSize()
                     .background(colors.background)
             ) {
-                // Top Bar with Search action
+                // Top Bar - sentence case as requested
                 LightTopBar(
                     leftButton = LightBarButton.LightIcon(LightIcons.BACK, onClick = { goBack() }),
-                    center = LightTopBarCenter.Text("Find stations"),
+                    center = LightTopBarCenter.Text("Results"),
                     rightButton = LightBarButton.LightIcon(
                         icon = LightIcons.SEARCH,
                         onClick = {
-                            focusManager.clearFocus()
-                            viewModel.search()
+                            // Go back to the entry screen to allow a new search
+                            goBack()
                         }
                     )
                 )
 
                 Column(modifier = Modifier.padding(horizontal = 24.dp)) {
-                    // Single-line search input
-                    OutlinedTextField(
-                        value = query,
-                        onValueChange = viewModel::updateQuery,
-                        label = { LightText("Search stations...", variant = LightTextVariant.Detail) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 16.dp, bottom = 16.dp),
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                        keyboardActions = KeyboardActions(
-                            onSearch = {
-                                focusManager.clearFocus()
-                                viewModel.search()
-                            }
-                        ),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = colors.content,
-                            unfocusedTextColor = colors.content,
-                            focusedBorderColor = colors.content,
-                            unfocusedBorderColor = colors.contentSecondary,
-                            focusedLabelColor = colors.content,
-                            unfocusedLabelColor = colors.contentSecondary,
-                            cursorColor = colors.content
-                        )
-                    )
-
                     // User feedback during search
                     if (searching) {
-                        LightText("Searching...", variant = LightTextVariant.Detail, lighten = true)
-                    } else if (query.length > 2 && results.isEmpty()) {
-                        LightText("No results found", variant = LightTextVariant.Detail, lighten = true)
+                        LightText("Searching for \"$query\"...", variant = LightTextVariant.Detail, lighten = true, modifier = Modifier.padding(vertical = 16.dp))
+                    } else if (results.isEmpty()) {
+                        LightText("No results found for \"$query\"", variant = LightTextVariant.Detail, lighten = true, modifier = Modifier.padding(vertical = 16.dp))
+                    } else {
+                        LightText("Results for \"$query\"", variant = LightTextVariant.Detail, lighten = true, modifier = Modifier.padding(vertical = 16.dp))
                     }
 
                     // List of search results
@@ -223,7 +190,7 @@ class SearchScreen(private val sealedActivity: SealedLightActivity) : LightScree
         }
     }
 
-    /** Individual search result row showing Name and stream metadata (Codec/Bitrate). */
+    /** Individual search result row showing Name and stream metadata. */
     @Composable
     private fun SearchResultRow(station: RadioBrowserStation, onClick: () -> Unit) {
         Column(
@@ -256,29 +223,12 @@ private fun PreviewSearchScreen() {
         ) {
             LightTopBar(
                 leftButton = LightBarButton.LightIcon(LightIcons.BACK, onClick = {}),
-                center = LightTopBarCenter.Text("Find stations"),
+                center = LightTopBarCenter.Text("Results"),
                 rightButton = LightBarButton.LightIcon(icon = LightIcons.SEARCH, onClick = {})
             )
 
             Column(modifier = Modifier.padding(horizontal = 24.dp)) {
-                OutlinedTextField(
-                    value = "Jazz",
-                    onValueChange = {},
-                    label = { LightText("Search stations...", variant = LightTextVariant.Detail) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 16.dp, bottom = 16.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        focusedBorderColor = Color.White,
-                        unfocusedBorderColor = Color.Gray,
-                        focusedLabelColor = Color.White,
-                        unfocusedLabelColor = Color.Gray,
-                        cursorColor = Color.White
-                    )
-                )
-
+                LightText("Results for \"Jazz\"", variant = LightTextVariant.Detail, lighten = true, modifier = Modifier.padding(vertical = 16.dp))
                 PreviewSearchResultRow("Jazz Radio", "MP3 • 128kbps")
                 PreviewSearchResultRow("Classic Jazz FM", "AAC • 64kbps")
             }

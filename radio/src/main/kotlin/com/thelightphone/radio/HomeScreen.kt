@@ -16,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.Player
 import com.thelightphone.sdk.InitialScreen
@@ -290,7 +291,7 @@ class RadioViewModel(
     /** Navigation handlers for sub-screens */
     
     fun openSearch() {
-        currentScreen?.navigateTo({ SearchScreen(it) }) { selectedStation ->
+        currentScreen?.navigateTo({ SearchEntryScreen(it) }) { selectedStation ->
             selectedStation?.let {
                 playStation(it)
             }
@@ -432,6 +433,8 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
                             text = name,
                             variant = LightTextVariant.Heading,
                             align = TextAlign.Center,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier
                                 .padding(horizontal = 40.dp)
                                 .lightClickable { viewModel.openRename() }
