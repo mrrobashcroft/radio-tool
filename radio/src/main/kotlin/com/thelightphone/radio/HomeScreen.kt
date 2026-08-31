@@ -89,6 +89,9 @@ class RadioViewModel(
     val playbackState = player.playbackState
     val error = player.error
     val isFavourite = MutableStateFlow(false)
+    
+    // Tracks a station that has been selected but hasn't started playing yet
+    private var pendingRecentStation: Station? = null
 
     init {
         // Initial setup: load saved data and find what we were playing last
@@ -96,6 +99,27 @@ class RadioViewModel(
         loadRecentStations()
         loadLastPlayed()
         updateFavouriteState()
+        
+        // Start watching the player state for "Proof of Play"
+        observePlaybackForHistory()
+    }
+
+    /** 
+     * Watches the player's "isPlaying" state. 
+     * Once a station actually starts playing, we move it from 'pending' to the official history.
+     */
+    private fun observePlaybackForHistory() {
+        viewModelScope.launch {
+            isPlaying.collect { playing ->
+                if (playing) {
+                    pendingRecentStation?.let { station ->
+                        android.util.Log.d("RadioViewModel", "Proof of Play received for: ${station.name}. Adding to history.")
+                        addToRecent(station)
+                        pendingRecentStation = null
+                    }
+                }
+            }
+        }
     }
 
     override fun onScreenShow(screen: SimpleLightScreen<Unit>) {
@@ -198,10 +222,13 @@ class RadioViewModel(
                 source = LightAudioSource.UrlSource(station.url),
                 metadata = LightMediaMetadata(title = station.name)
             )
+            
+            // Mark as pending - will be added to history once 'isPlaying' becomes true
+            pendingRecentStation = station
+            
             player.setMediaQueue(listOf(item))
             player.play()
             saveLastPlayed()
-            addToRecent(station)
             updateFavouriteState()
         }
     }
@@ -238,10 +265,13 @@ class RadioViewModel(
             source = LightAudioSource.UrlSource(sanitizedUrl),
             metadata = LightMediaMetadata(title = station.name)
         )
+        
+        // Mark as pending - history will only update if connection is successful
+        pendingRecentStation = sanitizedStation
+        
         player.setMediaQueue(listOf(item))
         player.play()
         saveLastPlayed()
-        addToRecent(sanitizedStation)
         updateFavouriteState()
     }
 
@@ -456,7 +486,6 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
                     LightText(
                         text = statusText,
                         variant = LightTextVariant.Detail,
-                        lighten = true,
                         modifier = Modifier.padding(bottom = 32.dp)
                     )
 
@@ -547,7 +576,6 @@ private fun PreviewContent() {
             LightText(
                 text = "Stopped",
                 variant = LightTextVariant.Detail,
-                lighten = true,
                 modifier = Modifier.padding(bottom = 32.dp)
             )
 

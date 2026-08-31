@@ -92,10 +92,12 @@ class SearchViewModel : LightViewModel<Station?>() {
         viewModelScope.launch {
             isSearching.value = true
             try {
+                // Radio Browser allows searching by name, tags, and country.
+                // Using the 'de1' mirror as it is generally the most reliable.
                 val encodedName = java.net.URLEncoder.encode(name, "UTF-8")
                 val url = "https://de1.api.radio-browser.info/json/stations/search?name=$encodedName&limit=50&hidebroken=true&order=clickcount&reverse=true"
                 
-                android.util.Log.d("SearchViewModel", "Searching: $url")
+                android.util.Log.d("SearchViewModel", "Searching Radio Browser: $url")
                 
                 val response: List<RadioBrowserStation> = client.get(url).body()
                 results.value = response
@@ -116,6 +118,7 @@ class SearchViewModel : LightViewModel<Station?>() {
         } else {
             station.url
         }
+        android.util.Log.d("SearchViewModel", "Selected: ${station.name} | URL: $streamUrl | Codec: ${station.codec}")
         currentScreen?.goBack(Station(station.name, streamUrl))
     }
 
@@ -168,11 +171,11 @@ class SearchScreen(
                 Column(modifier = Modifier.padding(horizontal = 24.dp)) {
                     // User feedback during search
                     if (searching) {
-                        LightText("Searching for \"$query\"...", variant = LightTextVariant.Detail, lighten = true, modifier = Modifier.padding(vertical = 16.dp))
+                        LightText("Searching for \"$query\"...", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 16.dp))
                     } else if (results.isEmpty()) {
-                        LightText("No results found for \"$query\"", variant = LightTextVariant.Detail, lighten = true, modifier = Modifier.padding(vertical = 16.dp))
+                        LightText("No results found for \"$query\"", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 16.dp))
                     } else {
-                        LightText("Results for \"$query\"", variant = LightTextVariant.Detail, lighten = true, modifier = Modifier.padding(vertical = 16.dp))
+                        LightText("Results for \"$query\"", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 16.dp))
                     }
 
                     // List of search results
@@ -206,7 +209,7 @@ class SearchScreen(
             station.bitrate?.takeIf { it > 0 }?.let { details.add("${it}kbps") }
             
             if (details.isNotEmpty()) {
-                LightText(text = details.joinToString(" • "), variant = LightTextVariant.Fine, lighten = true, maxLines = 1)
+                LightText(text = details.joinToString(" • "), variant = LightTextVariant.Fine, maxLines = 1)
             }
         }
     }
@@ -228,7 +231,7 @@ private fun PreviewSearchScreen() {
             )
 
             Column(modifier = Modifier.padding(horizontal = 24.dp)) {
-                LightText("Results for \"Jazz\"", variant = LightTextVariant.Detail, lighten = true, modifier = Modifier.padding(vertical = 16.dp))
+                LightText("Results for \"Jazz\"", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 16.dp))
                 PreviewSearchResultRow("Jazz Radio", "MP3 • 128kbps")
                 PreviewSearchResultRow("Classic Jazz FM", "AAC • 64kbps")
             }
@@ -244,6 +247,6 @@ private fun PreviewSearchResultRow(name: String, details: String) {
             .padding(vertical = 12.dp)
     ) {
         LightText(text = name, variant = LightTextVariant.Copy)
-        LightText(text = details, variant = LightTextVariant.Fine, lighten = true, maxLines = 1)
+        LightText(text = details, variant = LightTextVariant.Fine, maxLines = 1)
     }
 }

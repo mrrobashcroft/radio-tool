@@ -178,7 +178,6 @@ class LibraryScreen(private val sealedActivity: SealedLightActivity) : LightScre
                         LightText(
                             text = "Favourites",
                             variant = LightTextVariant.Subheading,
-                            lighten = activeTab != LibraryTab.Favourites
                         )
                         // Underline indicator for active tab
                         if (activeTab == LibraryTab.Favourites) {
@@ -202,7 +201,6 @@ class LibraryScreen(private val sealedActivity: SealedLightActivity) : LightScre
                         LightText(
                             text = "Recent",
                             variant = LightTextVariant.Subheading,
-                            lighten = activeTab != LibraryTab.Recent
                         )
                         // Underline indicator for active tab
                         if (activeTab == LibraryTab.Recent) {
@@ -231,7 +229,6 @@ class LibraryScreen(private val sealedActivity: SealedLightActivity) : LightScre
                         LightText(
                             text = if (activeTab == LibraryTab.Favourites) "No favourites yet" else "No recent stations",
                             variant = LightTextVariant.Copy,
-                            lighten = true
                         )
                     }
                 } else {
@@ -266,7 +263,7 @@ class LibraryScreen(private val sealedActivity: SealedLightActivity) : LightScre
                     .lightClickable(onClick = onPlay)
             ) {
                 LightText(text = station.name, variant = LightTextVariant.Copy)
-                LightText(text = station.url, variant = LightTextVariant.Fine, lighten = true, maxLines = 1)
+                LightText(text = station.url, variant = LightTextVariant.Fine, maxLines = 1)
             }
             
             // Delete button
@@ -328,7 +325,7 @@ private fun PreviewLibraryScreen() {
                     modifier = Modifier.weight(1f),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    LightText(text = "Recent", variant = LightTextVariant.Subheading, lighten = true)
+                    LightText(text = "Recent", variant = LightTextVariant.Subheading)
                 }
             }
 
@@ -350,7 +347,7 @@ private fun PreviewStationRow(name: String, url: String) {
     ) {
         Column(modifier = Modifier.weight(1f)) {
             LightText(text = name, variant = LightTextVariant.Copy)
-            LightText(text = url, variant = LightTextVariant.Fine, lighten = true, maxLines = 1)
+            LightText(text = url, variant = LightTextVariant.Fine, maxLines = 1)
         }
         com.thelightphone.sdk.ui.LightIcon(
             icon = LightIcons.CLOSE,
