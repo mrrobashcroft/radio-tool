@@ -321,7 +321,7 @@ class RadioViewModel(
     /** Navigation handlers for sub-screens */
     
     fun openSearch() {
-        currentScreen?.navigateTo({ SearchEntryScreen(it) }) { selectedStation ->
+        currentScreen?.navigateTo({ SearchScreen(it) }) { selectedStation ->
             selectedStation?.let {
                 playStation(it)
             }
