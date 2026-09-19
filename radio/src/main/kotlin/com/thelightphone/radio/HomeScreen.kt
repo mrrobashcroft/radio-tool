@@ -318,10 +318,13 @@ class RadioViewModel(
         return url
     }
 
+    // State for search persistence
+    private var lastSearchQuery: String = ""
+
     /** Navigation handlers for sub-screens */
     
     fun openSearch() {
-        currentScreen?.navigateTo({ SearchScreen(it) }) { selectedStation ->
+        currentScreen?.navigateTo({ SearchEntryScreen(it, lastSearchQuery) }) { selectedStation ->
             selectedStation?.let {
                 playStation(it)
             }

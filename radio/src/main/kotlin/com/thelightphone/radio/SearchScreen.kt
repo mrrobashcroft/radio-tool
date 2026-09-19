@@ -3,22 +3,12 @@ package com.thelightphone.radio
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.text.input.TextFieldState
-import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewModelScope
 import com.thelightphone.sdk.LightScreen
@@ -57,7 +47,7 @@ data class RadioBrowserStation(
 )
 
 /**
- * Logic for searching stations and managing persistent search history.
+ * Logic for searching stations and managing search history.
  */
 class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
     private val client = HttpClient(OkHttp) {
@@ -75,7 +65,6 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
     val results = MutableStateFlow<List<RadioBrowserStation>>(emptyList())
     val searchHistory = MutableStateFlow<List<String>>(emptyList())
     val isSearching = MutableStateFlow(false)
-    val lastQuery = MutableStateFlow("")
 
     init {
         loadHistory()
@@ -123,7 +112,6 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
         val name = query.trim()
         if (name.length < 2) return
         
-        lastQuery.value = name
         addToHistory(name)
         
         viewModelScope.launch {
@@ -158,9 +146,12 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
 }
 
 /**
- * Enhanced Search Screen with persistent history and state preservation.
+ * Screen for displaying radio station search results and history.
  */
-class SearchScreen(private val sealedActivity: SealedLightActivity) : LightScreen<Station?, SearchViewModel>(sealedActivity) {
+class SearchResultsScreen(
+    private val sealedActivity: SealedLightActivity,
+    private val query: String
+) : LightScreen<Station?, SearchViewModel>(sealedActivity) {
     override val viewModelClass = SearchViewModel::class.java
     override fun createViewModel() = SearchViewModel(lightContext.filesDir)
 
@@ -169,76 +160,59 @@ class SearchScreen(private val sealedActivity: SealedLightActivity) : LightScree
         val results by viewModel.results.collectAsState()
         val history by viewModel.searchHistory.collectAsState()
         val searching by viewModel.isSearching.collectAsState()
-        val lastQuery by viewModel.lastQuery.collectAsState()
-        val focusManager = LocalFocusManager.current
-        
-        // Persist the typing state locally to the screen
-        val inputState = rememberTextFieldState(lastQuery)
+
+        // Trigger search once when the screen is first shown
+        LaunchedEffect(query) {
+            viewModel.search(query)
+        }
 
         LightTheme(colors = LightThemeColors.Dark) {
             val colors = LightThemeTokens.colors
-            Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-                
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(colors.background)
+            ) {
                 LightTopBar(
                     leftButton = LightBarButton.LightIcon(LightIcons.BACK, onClick = { goBack() }),
-                    center = LightTopBarCenter.Text("Find stations"),
+                    center = LightTopBarCenter.Text("Results"),
                     rightButton = LightBarButton.LightIcon(
                         icon = LightIcons.SEARCH,
-                        onClick = {
-                            focusManager.clearFocus()
-                            viewModel.search(inputState.text.toString())
-                        }
+                        onClick = { goBack() } // Go back to the entry screen
                     )
                 )
 
                 Column(modifier = Modifier.padding(horizontal = 24.dp)) {
-                    // Modern, standard-compliant input (Underline style)
-                    Column(modifier = Modifier.padding(top = 16.dp, bottom = 8.dp)) {
-                        BasicTextField(
-                            state = inputState,
-                            textStyle = LightThemeTokens.typography.copy.copy(color = Color.White),
-                            cursorBrush = SolidColor(Color.White),
-                            modifier = Modifier.fillMaxWidth(),
-                            lineLimits = androidx.compose.foundation.text.input.TextFieldLineLimits.SingleLine,
-                            onKeyboardAction = {
-                                focusManager.clearFocus()
-                                viewModel.search(inputState.text.toString())
-                            }
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color.White))
-                    }
-
                     if (searching) {
-                        LightText("Searching...", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 16.dp))
+                        LightText("Searching for \"$query\"...", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 16.dp))
+                    } else if (results.isEmpty()) {
+                        LightText("No results found for \"$query\"", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 16.dp))
+                    } else {
+                        LightText("Results for \"$query\"", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 16.dp))
                     }
 
+                    // List area
                     LightScrollView(modifier = Modifier.weight(1f)) {
                         Column {
-                            if (results.isNotEmpty()) {
-                                // Show Results
-                                LightText("Results", variant = LightTextVariant.Detail, lighten = false, modifier = Modifier.padding(vertical = 8.dp))
-                                results.forEach { station ->
-                                    SearchResultRow(station) {
-                                        viewModel.selectStation(station)
-                                    }
+                            // Show Results
+                            results.forEach { station ->
+                                SearchResultRow(station) {
+                                    viewModel.selectStation(station)
                                 }
-                                Spacer(modifier = Modifier.height(24.dp))
                             }
                             
-                            if (history.isNotEmpty()) {
-                                // Show Search History
-                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 16.dp, bottom = 8.dp)) {
-                                    LightText("Recent searches", variant = LightTextVariant.Detail, modifier = Modifier.weight(1f))
-                                }
+                            // Show History at the bottom or if no results
+                            if (!searching && (results.isEmpty() || history.isNotEmpty())) {
+                                Spacer(modifier = Modifier.height(32.dp))
+                                LightText("Recent searches", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 8.dp))
                                 history.forEach { item ->
                                     HistoryRow(
                                         query = item,
                                         onSelect = { 
-                                            inputState.edit { 
-                                                replace(0, length, item)
-                                            }
-                                            viewModel.search(item) 
+                                            // Re-searching from history is handled by going back to entry
+                                            // or we can implement it here. For simplicity, we'll navigate back.
+                                            // Actually, let's just trigger a search here.
+                                            viewModel.search(item)
                                         },
                                         onDelete = { viewModel.removeFromHistory(item) }
                                     )
@@ -253,7 +227,12 @@ class SearchScreen(private val sealedActivity: SealedLightActivity) : LightScree
 
     @Composable
     private fun SearchResultRow(station: RadioBrowserStation, onClick: () -> Unit) {
-        Column(modifier = Modifier.fillMaxWidth().lightClickable(onClick = onClick).padding(vertical = 12.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .lightClickable(onClick = onClick)
+                .padding(vertical = 12.dp)
+        ) {
             LightText(text = station.name, variant = LightTextVariant.Copy)
             val details = mutableListOf<String>()
             station.country?.takeIf { it.isNotBlank() }?.let { details.add(it) }

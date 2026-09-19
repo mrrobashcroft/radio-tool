@@ -87,7 +87,8 @@ class AddStationUrlScreen(
  * Screen for entering a search query for radio stations.
  */
 class SearchEntryScreen(
-    private val sealedActivity: SealedLightActivity
+    private val sealedActivity: SealedLightActivity,
+    private val lastQuery: String = ""
 ) : LightScreen<Station?, SimpleEntryViewModel<Station?>>(sealedActivity) {
 
     override val viewModelClass: Class<SimpleEntryViewModel<Station?>> = SimpleEntryViewModel::class.java as Class<SimpleEntryViewModel<Station?>>
@@ -95,7 +96,8 @@ class SearchEntryScreen(
 
     @Composable
     override fun Content() {
-        val state = rememberTextFieldState()
+        // Pre-fill with lastQuery to support "not retyping everything"
+        val state = rememberTextFieldState(lastQuery)
         val currentScreen = this
         
         LightTheme(colors = LightThemeColors.Dark) {
@@ -107,7 +109,7 @@ class SearchEntryScreen(
                     val query = it.toString().trim()
                     if (query.isNotBlank()) {
                         // Navigate forward to the results list
-                        currentScreen.navigateTo({ SearchScreen(it, query) }) { selectedStation ->
+                        currentScreen.navigateTo({ SearchResultsScreen(it, query) }) { selectedStation ->
                             // When a station is selected in the list, pass it all the way back to the Home screen
                             selectedStation?.let { goBack(it) }
                         }
@@ -116,7 +118,7 @@ class SearchEntryScreen(
                 onBack = { goBack(null) },
                 submitLabel = "SEARCH",
                 submitIcon = LightIcons.SEARCH,
-                singleLine = true // Enables horizontal scrolling and enter-to-submit
+                singleLine = true // Enables enter-to-submit for fast searching
             )
         }
     }
