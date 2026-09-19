@@ -204,7 +204,7 @@ class RadioViewModel(
         val newList = recentStations.value.toMutableList()
         newList.removeAll { it.url == station.url }
         newList.add(0, station)
-        if (newList.size > 10) {
+        if (newList.size > 15) {
             newList.removeAt(newList.size - 1)
         }
         recentStations.value = newList

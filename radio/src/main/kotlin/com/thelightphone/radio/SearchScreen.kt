@@ -65,6 +65,8 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
     val results = MutableStateFlow<List<RadioBrowserStation>>(emptyList())
     val searchHistory = MutableStateFlow<List<String>>(emptyList())
     val isSearching = MutableStateFlow(false)
+    val hasPerformedSearch = MutableStateFlow(false)
+    val activeQuery = MutableStateFlow("")
 
     init {
         loadHistory()
@@ -112,10 +114,13 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
         val name = query.trim()
         if (name.length < 2) return
         
+        activeQuery.value = name
+        hasPerformedSearch.value = true
         addToHistory(name)
         
         viewModelScope.launch {
             isSearching.value = true
+            results.value = emptyList() // Clear old results while searching
             try {
                 val encodedName = java.net.URLEncoder.encode(name, "UTF-8")
                 val url = "https://de1.api.radio-browser.info/json/stations/search?name=$encodedName&limit=50&hidebroken=true&order=clickcount&reverse=true"
@@ -160,10 +165,14 @@ class SearchResultsScreen(
         val results by viewModel.results.collectAsState()
         val history by viewModel.searchHistory.collectAsState()
         val searching by viewModel.isSearching.collectAsState()
+        val hasSearched by viewModel.hasPerformedSearch.collectAsState()
+        val activeQuery by viewModel.activeQuery.collectAsState()
 
         // Trigger search once when the screen is first shown
         LaunchedEffect(query) {
-            viewModel.search(query)
+            if (!hasSearched) {
+                viewModel.search(query)
+            }
         }
 
         LightTheme(colors = LightThemeColors.Dark) {
@@ -184,11 +193,11 @@ class SearchResultsScreen(
 
                 Column(modifier = Modifier.padding(horizontal = 24.dp)) {
                     if (searching) {
-                        LightText("Searching for \"$query\"...", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 16.dp))
-                    } else if (results.isEmpty()) {
-                        LightText("No results found for \"$query\"", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 16.dp))
-                    } else {
-                        LightText("Results for \"$query\"", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 16.dp))
+                        LightText("Searching for \"$activeQuery\"...", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 16.dp))
+                    } else if (hasSearched && results.isEmpty()) {
+                        LightText("No results found for \"$activeQuery\"", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 16.dp))
+                    } else if (hasSearched) {
+                        LightText("Results for \"$activeQuery\"", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 16.dp))
                     }
 
                     // List area
@@ -209,9 +218,7 @@ class SearchResultsScreen(
                                     HistoryRow(
                                         query = item,
                                         onSelect = { 
-                                            // Re-searching from history is handled by going back to entry
-                                            // or we can implement it here. For simplicity, we'll navigate back.
-                                            // Actually, let's just trigger a search here.
+                                            // Re-searching from history
                                             viewModel.search(item)
                                         },
                                         onDelete = { viewModel.removeFromHistory(item) }
