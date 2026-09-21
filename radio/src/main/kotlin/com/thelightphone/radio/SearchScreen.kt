@@ -37,8 +37,7 @@ import com.thelightphone.sdk.ui.keyboard.LightEmbeddedLp3Keyboard
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
-import io.ktor.client.plugins.DefaultRequest
-import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.*
 import io.ktor.http.*
@@ -115,7 +114,7 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
 
     override fun onScreenShow(screen: SimpleLightScreen<Station?>) {
         currentScreen = screen
-        // Reset to Search tab when entering from Home
+        // Always reset to Search tab when entering from Home
         activeTab.value = SearchTab.Search
         if (!hasPerformedSearch.value) {
             mode.value = SearchMode.Input
@@ -165,47 +164,80 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
         addToHistory(name)
         
         viewModelScope.launch {
-            isSearching.value = true
-            results.value = emptyList()
-            directUrlResult.value = null
-            directUrlError.value = null
-
-            if (name.contains(".") && !name.contains(" ")) {
-                var urlToTest = sanitizeUrl(name)
-                var isValid = validateStreamUrl(urlToTest)
-                if (!isValid) {
-                    if (urlToTest.endsWith(";")) {
-                        val cleanUrl = urlToTest.removeSuffix(";").removeSuffix("/")
-                        if (validateStreamUrl(cleanUrl)) {
-                            urlToTest = cleanUrl
-                            isValid = true
-                        }
-                    }
-                    if (!isValid && urlToTest.startsWith("http://")) {
-                        val secureUrl = urlToTest.replace("http://", "https://")
-                        if (validateStreamUrl(secureUrl)) {
-                            urlToTest = secureUrl
-                            isValid = true
-                        }
-                    }
-                }
-
-                if (isValid) {
-                    directUrlResult.value = Station(name = "Untitled", url = urlToTest)
-                    isSearching.value = false
-                    return@launch
-                } else {
-                    directUrlError.value = "Direct URL not found"
-                }
-            }
-
             try {
-                val encodedName = java.net.URLEncoder.encode(name, "UTF-8")
-                val url = "https://de1.api.radio-browser.info/json/stations/search?name=$encodedName&limit=50&hidebroken=true&order=clickcount&reverse=true"
-                val response: List<RadioBrowserStation> = client.get(url).body()
-                results.value = response
-            } catch (e: Exception) {
+                isSearching.value = true
                 results.value = emptyList()
+                directUrlResult.value = null
+                directUrlError.value = null
+
+                val isLikelyAddress = name.contains(".") && !name.contains(" ")
+                val isIpAddress = isLikelyAddress && name.firstOrNull()?.isDigit() == true
+
+                if (isLikelyAddress) {
+                    var urlToTest = sanitizeUrl(name)
+                    // validateStreamUrl now uses execute {} to read ONLY headers and avoid infinite hangs
+                    var isValid = validateStreamUrl(urlToTest)
+                    
+                    if (!isValid && !isIpAddress) {
+                        // For domain names, try common fallbacks
+                        if (urlToTest.endsWith(";")) {
+                            val cleanUrl = urlToTest.removeSuffix(";").removeSuffix("/")
+                            if (validateStreamUrl(cleanUrl)) {
+                                urlToTest = cleanUrl
+                                isValid = true
+                            }
+                        }
+                        if (!isValid && urlToTest.startsWith("http://")) {
+                            val secureUrl = urlToTest.replace("http://", "https://")
+                            if (validateStreamUrl(secureUrl)) {
+                                urlToTest = secureUrl
+                                isValid = true
+                            }
+                        }
+                    }
+
+                    if (isValid) {
+                        directUrlResult.value = Station(name = "Untitled", url = urlToTest)
+                        return@launch
+                    } else if (isIpAddress) {
+                        // Strict single-pass fail for IPs to avoid multi-timeout "hangs"
+                        directUrlError.value = "No results found"
+                        return@launch
+                    }
+                }
+
+                // Point 3: FLEXIBLE SEARCH ENGINE (Word order independent)
+                try {
+                    val searchWords = name.split(" ").filter { it.isNotBlank() }
+                    
+                    // 1. Try exact search first
+                    val encodedName = java.net.URLEncoder.encode(name, "UTF-8")
+                    val standardUrl = "https://de1.api.radio-browser.info/json/stations/search?name=$encodedName&limit=50&hidebroken=true&order=clickcount&reverse=true"
+                    val standardResponse: List<RadioBrowserStation> = client.get(standardUrl).body()
+                    
+                    if (standardResponse.size >= 5) {
+                        results.value = standardResponse
+                    } else {
+                        // 2. BROAD FALLBACK: If few results, search by most unique word and filter locally
+                        val significantWord = searchWords.maxByOrNull { it.length } ?: name
+                        val encodedWord = java.net.URLEncoder.encode(significantWord, "UTF-8")
+                        val broadUrl = "https://de1.api.radio-browser.info/json/stations/search?name=$encodedWord&limit=100&hidebroken=true&order=clickcount&reverse=true"
+                        val broadResponse: List<RadioBrowserStation> = client.get(broadUrl).body()
+                        
+                        // Filter locally to ensure ALL search words are present in any order
+                        val filtered = broadResponse.filter { station ->
+                            searchWords.all { word -> 
+                                station.name.contains(word, ignoreCase = true) || 
+                                (station.tags?.contains(word, ignoreCase = true) == true)
+                            }
+                        }
+                        
+                        // Combine results, prioritizing standard ones
+                        results.value = (standardResponse + filtered).distinctBy { it.url }
+                    }
+                } catch (e: Exception) {
+                    results.value = emptyList()
+                }
             } finally {
                 isSearching.value = false
             }
@@ -214,13 +246,31 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
 
     private suspend fun validateStreamUrl(urlString: String): Boolean {
         return try {
+            // Using prepareRequest + execute ensures we ONLY read the headers
             client.prepareRequest {
                 url(urlString)
                 method = HttpMethod.Get
                 header("Icy-MetaData", "1")
                 header("User-Agent", "LightPhoneRadioTool/1.0")
+                timeout {
+                    requestTimeoutMillis = 5000
+                    connectTimeoutMillis = 5000
+                    socketTimeoutMillis = 5000
+                }
             }.execute { response ->
-                response.status.isSuccess() || response.status == HttpStatusCode.MovedPermanently || response.status == HttpStatusCode.Found
+                val status = response.status
+                if (status.isSuccess() || status == HttpStatusCode.MovedPermanently || status == HttpStatusCode.Found) {
+                    val contentType = response.contentType()?.toString()?.lowercase() ?: ""
+                    // Only accept audio/playlist streams (filters out webpages)
+                    contentType.contains("audio") || 
+                    contentType.contains("mpegurl") || 
+                    contentType.contains("application/ogg") ||
+                    contentType.contains("application/vnd.apple.mpegurl") ||
+                    contentType.contains("application/x-mpegurl") ||
+                    contentType.contains("octet-stream")
+                } else {
+                    false
+                }
             }
         } catch (e: Exception) {
             false
@@ -262,7 +312,7 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
 }
 
 /**
- * EXACT line-for-line replication of the official SDK keyboard callback to ensure parity and stability.
+ * Safe keyboard callback replicating the official SDK logic exactly.
  */
 class OfficialSafeKeyboardCallback(
     private val state: TextFieldState,
@@ -281,10 +331,7 @@ class OfficialSafeKeyboardCallback(
         }
     }
     override fun onKeyRepeated(code: Int) { onKeyReleased(code) }
-    override fun onSpecialKeyRepeated(specialKey: SpecialKey) {
-        if (specialKey == SpecialKey.Backspace) deleteBeforeCursor(1)
-        if (specialKey == SpecialKey.Space) insertAtCursor(" ")
-    }
+    override fun onSpecialKeyRepeated(specialKey: SpecialKey) { if (specialKey == SpecialKey.Backspace) deleteBeforeCursor(1) }
     override fun onKeyLongPressed(code: Int) {}
     override fun onSpecialKeyLongPressed(key: SpecialKey) {
         if (key == SpecialKey.Backspace) {
@@ -311,11 +358,11 @@ class OfficialSafeKeyboardCallback(
         }
     }
 
-    private fun deleteBeforeCursor(requestedCount: Int) {
+    private fun deleteBeforeCursor(count: Int) {
         state.edit {
             val end = selection.min.coerceIn(0, length)
             if (end > 0) {
-                val actualCount = if (end >= 2 && Character.isLowSurrogate(toString()[end - 1])) 2 else requestedCount
+                val actualCount = if (end >= 2 && Character.isLowSurrogate(toString()[end - 1])) 2 else count
                 val start = (end - actualCount).coerceAtLeast(0)
                 delete(start, end)
                 selection = TextRange(start)
@@ -373,7 +420,7 @@ class SearchScreen(private val sealedActivity: SealedLightActivity) : LightScree
                     Column(modifier = Modifier.weight(1f)) {
                         if (activeTab == SearchTab.Search) {
                             if (mode == SearchMode.Input) {
-                                // 3. TYPING AREA (Identical to LightTextInputEditor Logic)
+                                // 3. TYPING AREA (Official SDK Replication - Exact Parity with Rename)
                                 var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
                                 
                                 Column(
@@ -424,7 +471,7 @@ class SearchScreen(private val sealedActivity: SealedLightActivity) : LightScree
                                     Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(colors.content))
                                 }
                             } else {
-                                ResultsListView(results, directUrl, directError, history, searching, hasSearched, activeQuery)
+                                ResultsListView(results, directUrl, directError, history, searching, hasSearched, activeQuery, inputState)
                             }
                         } else {
                             HistoryListView(history, inputState)
@@ -484,7 +531,7 @@ class SearchScreen(private val sealedActivity: SealedLightActivity) : LightScree
     }
 
     @Composable
-    private fun ResultsListView(results: List<RadioBrowserStation>, directUrl: Station?, directError: String?, history: List<String>, searching: Boolean, hasSearched: Boolean, activeQuery: String) {
+    private fun ResultsListView(results: List<RadioBrowserStation>, directUrl: Station?, directError: String?, history: List<String>, searching: Boolean, hasSearched: Boolean, activeQuery: String, inputState: TextFieldState) {
         Column(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
             if (searching) {
                 LightText("Searching for \"$activeQuery\"...", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 16.dp))
@@ -506,7 +553,12 @@ class SearchScreen(private val sealedActivity: SealedLightActivity) : LightScree
                         Spacer(modifier = Modifier.height(32.dp))
                         LightText("Recent searches", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 8.dp))
                         history.forEach { item ->
-                            HistoryRow(query = item, onSelect = { viewModel.search(item) }, onDelete = { viewModel.removeFromHistory(item) })
+                            HistoryRow(query = item, onSelect = { 
+                                // Pre-fill the input and switch to search tab for editing
+                                inputState.edit { replace(0, length, item) }
+                                viewModel.setActiveTab(SearchTab.Search)
+                                viewModel.showInput()
+                            }, onDelete = { viewModel.removeFromHistory(item) })
                         }
                     }
                 }
