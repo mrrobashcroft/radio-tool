@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -31,18 +32,7 @@ import com.thelightphone.sdk.audio.LightAudioSource
 import com.thelightphone.sdk.audio.LightMediaMetadata
 import com.thelightphone.sdk.callRemoteServiceMethod
 import com.thelightphone.sdk.shared.LightServiceMethod
-import com.thelightphone.sdk.ui.LightBarButton
-import com.thelightphone.sdk.ui.LightBottomBar
-import com.thelightphone.sdk.ui.LightIcons
-import com.thelightphone.sdk.ui.LightText
-import com.thelightphone.sdk.ui.LightTextVariant
-import com.thelightphone.sdk.ui.LightTheme
-import com.thelightphone.sdk.ui.LightThemeColors
-import com.thelightphone.sdk.ui.LightThemeController
-import com.thelightphone.sdk.ui.LightThemeTokens
-import com.thelightphone.sdk.ui.LightTopBar
-import com.thelightphone.sdk.ui.LightTopBarCenter
-import com.thelightphone.sdk.ui.lightClickable
+import com.thelightphone.sdk.ui.*
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.lifecycle.viewModelScope
 import java.io.File
@@ -198,7 +188,7 @@ class RadioViewModel(
         } catch (e: Exception) {}
     }
 
-    /** Adds a station to the top of the history list, maintaining a max of 10 items. */
+    /** Adds a station to the top of the history list, maintaining a max of 15 items. */
     private fun addToRecent(station: Station) {
         loadRecentStations() // Ensure we have the latest list from disk before modifying
         val newList = recentStations.value.toMutableList()
@@ -318,13 +308,10 @@ class RadioViewModel(
         return url
     }
 
-    // State for search persistence
-    private var lastSearchQuery: String = ""
-
     /** Navigation handlers for sub-screens */
     
     fun openSearch() {
-        currentScreen?.navigateTo({ SearchEntryScreen(it, lastSearchQuery) }) { selectedStation ->
+        currentScreen?.navigateTo({ SearchScreen(it) }) { selectedStation ->
             selectedStation?.let {
                 playStation(it)
             }
@@ -375,18 +362,9 @@ class RadioViewModel(
         saveLastPlayed()
     }
 
-    fun openAddStation() {
-        currentScreen?.navigateTo({ AddStationUrlScreen(it) }) { selectedStation ->
-            selectedStation?.let {
-                playStation(it)
-            }
-        }
-    }
-
     fun openBluetooth() {
         viewModelScope.launch {
             // This relies on the LightOS server implementing this custom bridge method.
-            // On early SDK builds for physical hardware, this may not trigger an action yet.
             callRemoteServiceMethod(LightServiceMethod.OpenBluetoothSettings, Unit)
         }
     }
@@ -505,11 +483,10 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
                     }
                 }
 
-                // Standard LightOS Bottom Navigation Bar
+                // Standard LightOS Bottom Navigation Bar (Unified Search)
                 LightBottomBar(
                     items = listOf(
                         LightBarButton.LightIcon(LightIcons.SEARCH, onClick = viewModel::openSearch),
-                        LightBarButton.LightIcon(LightIcons.ADD, onClick = viewModel::openAddStation),
                         LightBarButton.LightIcon(LightIcons.LIST, onClick = viewModel::openLibrary),
                         LightBarButton.LightIcon(LightIcons.BLUETOOTH, onClick = viewModel::openBluetooth)
                     )
@@ -519,82 +496,41 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
     }
 }
 
-@Preview(widthDp = 1080 / 3, heightDp = 1240 / 3, showBackground = true)
-@Composable
-private fun PreviewHomeScreenDark() {
-    LightTheme(colors = LightThemeColors.Dark) {
-        PreviewContent()
-    }
-}
+/**
+ * Screen for renaming a station using the standard full-screen editor style.
+ */
+class RenameScreen(
+    private val sealedActivity: SealedLightActivity,
+    private val initialName: String
+) : LightScreen<String?, SimpleEntryViewModel<String?>>(sealedActivity) {
 
-@Preview(widthDp = 1080 / 3, heightDp = 1240 / 3, showBackground = true)
-@Composable
-private fun PreviewHomeScreenLight() {
-    LightTheme(colors = LightThemeColors.Light) {
-        PreviewContent()
-    }
-}
+    override val viewModelClass: Class<SimpleEntryViewModel<String?>> = SimpleEntryViewModel::class.java as Class<SimpleEntryViewModel<String?>>
+    override fun createViewModel(): SimpleEntryViewModel<String?> = SimpleEntryViewModel()
 
-@Composable
-private fun PreviewContent() {
-    val colors = LightThemeTokens.colors
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(colors.background)
-    ) {
-        LightTopBar(
-            leftButton = LightBarButton.LightIcon(LightIcons.BACK, onClick = {}),
-            center = LightTopBarCenter.Text("Radio")
-        )
-
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = 24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 16.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                LightText(
-                    text = "Radio",
-                    variant = LightTextVariant.Heading,
-                    align = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 40.dp)
-                )
-                
-                com.thelightphone.sdk.ui.LightIcon(
-                    icon = LightIcons.STAR_OUTLINE,
-                    size = 1.5f,
-                    modifier = Modifier.align(Alignment.CenterEnd)
-                )
-            }
-
-            LightText(
-                text = "Stopped",
-                variant = LightTextVariant.Detail,
-                modifier = Modifier.padding(bottom = 32.dp)
-            )
-
-            com.thelightphone.sdk.ui.LightIcon(
-                icon = LightIcons.PLAY,
-                size = 2.5f
+    @Composable
+    override fun Content() {
+        val state = rememberTextFieldState(initialName)
+        
+        LightTheme(colors = LightThemeColors.Dark) {
+            LightTextInputEditor(
+                title = "Rename",
+                state = state,
+                keyboardOptionsFlow = kotlinx.coroutines.flow.MutableStateFlow(defaultKeyboardOptions()),
+                onSubmit = { 
+                    val trimmed = it.toString().trim()
+                    if (trimmed.isNotBlank()) {
+                        goBack(trimmed)
+                    }
+                },
+                onBack = { goBack(null) },
+                submitLabel = "SAVE",
+                singleLine = false 
             )
         }
-
-        LightBottomBar(
-            items = listOf(
-                LightBarButton.LightIcon(LightIcons.SEARCH, onClick = {}),
-                LightBarButton.LightIcon(LightIcons.ADD, onClick = {}),
-                LightBarButton.LightIcon(LightIcons.LIST, onClick = {}),
-                LightBarButton.LightIcon(LightIcons.BLUETOOTH, onClick = {})
-            )
-        )
     }
 }
+
+/**
+ * Simple concrete ViewModel for text entry screens.
+ */
+class SimpleEntryViewModel<T> : LightViewModel<T>()

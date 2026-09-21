@@ -2,28 +2,48 @@
 package com.thelightphone.radio
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.input.*
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewModelScope
+import com.thelightphone.lp3Keyboard.ui.LayoutOptions
+import com.thelightphone.lp3Keyboard.ui.SpecialKey
+import com.thelightphone.lp3Keyboard.ui.viewmodel.EnQwertyLp3KeyboardViewModel
+import com.thelightphone.lp3Keyboard.ui.viewmodel.Lp3RepeatableKeyboardCallback
 import com.thelightphone.sdk.LightScreen
 import com.thelightphone.sdk.LightViewModel
 import com.thelightphone.sdk.SealedLightActivity
 import com.thelightphone.sdk.SimpleLightScreen
 import com.thelightphone.sdk.ui.*
+import com.thelightphone.sdk.ui.keyboard.LightEmbeddedLp3Keyboard
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.DefaultRequest
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
-import io.ktor.client.request.get
-import io.ktor.client.request.header
+import io.ktor.client.request.*
+import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.json
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
@@ -31,6 +51,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Data model for the Radio Browser API response.
@@ -47,15 +68,31 @@ data class RadioBrowserStation(
 )
 
 /**
+ * Enum for the Search Hub tabs.
+ */
+enum class SearchTab {
+    Search,
+    History
+}
+
+/**
+ * Enum for the Search modes within the Search tab.
+ */
+enum class SearchMode {
+    Input,
+    Results
+}
+
+/**
  * Logic for searching stations and managing search history.
  */
 class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
     private val client = HttpClient(OkHttp) {
-        install(ContentNegotiation) {
-            json(Json { ignoreUnknownKeys = true })
-        }
-        install(DefaultRequest) {
-            header("User-Agent", "LightPhoneRadioTool/1.0")
+        install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
+        install(DefaultRequest) { header("User-Agent", "LightPhoneRadioTool/1.0") }
+        install(HttpTimeout) {
+            requestTimeoutMillis = 10000
+            connectTimeoutMillis = 10000
         }
     }
 
@@ -67,6 +104,10 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
     val isSearching = MutableStateFlow(false)
     val hasPerformedSearch = MutableStateFlow(false)
     val activeQuery = MutableStateFlow("")
+    val directUrlResult = MutableStateFlow<Station?>(null)
+    val directUrlError = MutableStateFlow<String?>(null)
+    val mode = MutableStateFlow(SearchMode.Input)
+    val activeTab = MutableStateFlow(SearchTab.Search)
 
     init {
         loadHistory()
@@ -74,6 +115,11 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
 
     override fun onScreenShow(screen: SimpleLightScreen<Station?>) {
         currentScreen = screen
+        // Reset to Search tab when entering from Home
+        activeTab.value = SearchTab.Search
+        if (!hasPerformedSearch.value) {
+            mode.value = SearchMode.Input
+        }
     }
 
     private fun loadHistory() {
@@ -93,12 +139,10 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
     fun addToHistory(query: String) {
         val trimmed = query.trim()
         if (trimmed.length < 2) return
-        
         val newList = searchHistory.value.toMutableList()
         newList.removeAll { it.equals(trimmed, ignoreCase = true) }
         newList.add(0, trimmed)
         if (newList.size > 15) newList.removeAt(newList.size - 1)
-        
         searchHistory.value = newList
         saveHistory()
     }
@@ -110,24 +154,57 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
         saveHistory()
     }
 
-    fun search(query: String) {
-        val name = query.trim()
+    fun search(query: CharSequence) {
+        val name = query.toString().trim()
         if (name.length < 2) return
         
         activeQuery.value = name
         hasPerformedSearch.value = true
+        mode.value = SearchMode.Results
+        activeTab.value = SearchTab.Search
         addToHistory(name)
         
         viewModelScope.launch {
             isSearching.value = true
-            results.value = emptyList() // Clear old results while searching
+            results.value = emptyList()
+            directUrlResult.value = null
+            directUrlError.value = null
+
+            if (name.contains(".") && !name.contains(" ")) {
+                var urlToTest = sanitizeUrl(name)
+                var isValid = validateStreamUrl(urlToTest)
+                if (!isValid) {
+                    if (urlToTest.endsWith(";")) {
+                        val cleanUrl = urlToTest.removeSuffix(";").removeSuffix("/")
+                        if (validateStreamUrl(cleanUrl)) {
+                            urlToTest = cleanUrl
+                            isValid = true
+                        }
+                    }
+                    if (!isValid && urlToTest.startsWith("http://")) {
+                        val secureUrl = urlToTest.replace("http://", "https://")
+                        if (validateStreamUrl(secureUrl)) {
+                            urlToTest = secureUrl
+                            isValid = true
+                        }
+                    }
+                }
+
+                if (isValid) {
+                    directUrlResult.value = Station(name = "Untitled", url = urlToTest)
+                    isSearching.value = false
+                    return@launch
+                } else {
+                    directUrlError.value = "Direct URL not found"
+                }
+            }
+
             try {
                 val encodedName = java.net.URLEncoder.encode(name, "UTF-8")
                 val url = "https://de1.api.radio-browser.info/json/stations/search?name=$encodedName&limit=50&hidebroken=true&order=clickcount&reverse=true"
                 val response: List<RadioBrowserStation> = client.get(url).body()
                 results.value = response
             } catch (e: Exception) {
-                android.util.Log.e("SearchViewModel", "Search failed for '$name'", e)
                 results.value = emptyList()
             } finally {
                 isSearching.value = false
@@ -135,14 +212,48 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
         }
     }
 
-    fun selectStation(station: RadioBrowserStation) {
-        val streamUrl = if (station.urlResolved?.contains(".") == true && !station.urlResolved.endsWith(".")) {
-            station.urlResolved
-        } else {
-            station.url
+    private suspend fun validateStreamUrl(urlString: String): Boolean {
+        return try {
+            client.prepareRequest {
+                url(urlString)
+                method = HttpMethod.Get
+                header("Icy-MetaData", "1")
+                header("User-Agent", "LightPhoneRadioTool/1.0")
+            }.execute { response ->
+                response.status.isSuccess() || response.status == HttpStatusCode.MovedPermanently || response.status == HttpStatusCode.Found
+            }
+        } catch (e: Exception) {
+            false
         }
-        currentScreen?.goBack(Station(station.name, streamUrl))
     }
+
+    private fun sanitizeUrl(input: String): String {
+        var url = input.trim()
+        if (url.isBlank()) return url
+        if (!url.startsWith("http://") && !url.startsWith("https://")) url = "http://$url"
+        if (url.contains(";") || url.lowercase().contains(".m3u8")) return url
+        val protocolEnd = url.indexOf("://") + 3
+        val firstSlash = url.indexOf("/", protocolEnd)
+        if (firstSlash == -1 || firstSlash == url.length - 1) {
+            val hostPart = if (firstSlash == -1) url.substring(protocolEnd) else url.substring(protocolEnd, firstSlash)
+            val isLegacy = hostPart.firstOrNull()?.isDigit() == true || hostPart.contains(":")
+            if (isLegacy) return if (url.endsWith("/")) "${url};" else "${url}/;"
+        }
+        val hostPartEnd = if (firstSlash == -1) url.length else firstSlash
+        val hostPart = url.substring(protocolEnd, hostPartEnd)
+        val isLegacyPort = hostPart.contains(":8000") || hostPart.contains(":18442") || hostPart.contains(":8002") || hostPart.contains(":8005") || hostPart.contains(":7000")
+        if (isLegacyPort) return "${url};"
+        return url
+    }
+
+    fun selectStation(station: RadioBrowserStation) {
+        val name = if (station.name == "Untitled") "Untitled" else station.name
+        val streamUrl = if (station.urlResolved?.contains(".") == true && !station.urlResolved.endsWith(".")) station.urlResolved else station.url
+        currentScreen?.goBack(Station(name, streamUrl))
+    }
+
+    fun showInput() { mode.value = SearchMode.Input }
+    fun setActiveTab(tab: SearchTab) { activeTab.value = tab }
 
     override fun onCleared() {
         client.close()
@@ -151,80 +262,251 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
 }
 
 /**
- * Screen for displaying radio station search results and history.
+ * EXACT line-for-line replication of the official SDK keyboard callback to ensure parity and stability.
  */
-class SearchResultsScreen(
-    private val sealedActivity: SealedLightActivity,
-    private val query: String
-) : LightScreen<Station?, SearchViewModel>(sealedActivity) {
+class OfficialSafeKeyboardCallback(
+    private val state: TextFieldState,
+    private val onReturn: () -> Unit
+) : Lp3RepeatableKeyboardCallback {
+    override fun onKeyPressed(code: Int) {}
+    override fun onSpecialKeyPressed(key: SpecialKey) {
+        if (key == SpecialKey.Space) insertAtCursor(" ")
+    }
+    override fun onKeyReleased(code: Int) { insertAtCursor(buildString { appendCodePoint(code) }) }
+    override fun onSpecialKeyReleased(key: SpecialKey) {
+        when (key) {
+            SpecialKey.Backspace -> deleteBeforeCursor(1)
+            SpecialKey.Return -> onReturn()
+            else -> Unit
+        }
+    }
+    override fun onKeyRepeated(code: Int) { onKeyReleased(code) }
+    override fun onSpecialKeyRepeated(specialKey: SpecialKey) {
+        if (specialKey == SpecialKey.Backspace) deleteBeforeCursor(1)
+        if (specialKey == SpecialKey.Space) insertAtCursor(" ")
+    }
+    override fun onKeyLongPressed(code: Int) {}
+    override fun onSpecialKeyLongPressed(key: SpecialKey) {
+        if (key == SpecialKey.Backspace) {
+            state.edit {
+                val end = selection.min.coerceIn(0, length)
+                if (end > 0) {
+                    val textBefore = toString().substring(0, end)
+                    val lastSpace = textBefore.trimEnd().lastIndexOf(' ')
+                    val start = if (lastSpace >= 0) lastSpace + 1 else 0
+                    delete(start, end)
+                    selection = TextRange(start)
+                }
+            }
+        }
+    }
+    override fun onSubmitWord(word: CharSequence) { insertAtCursor(word.toString()) }
+
+    private fun insertAtCursor(text: String) {
+        state.edit {
+            val start = selection.min.coerceIn(0, length)
+            val end = selection.max.coerceIn(0, length)
+            replace(start, end, text)
+            selection = TextRange(start + text.length)
+        }
+    }
+
+    private fun deleteBeforeCursor(requestedCount: Int) {
+        state.edit {
+            val end = selection.min.coerceIn(0, length)
+            if (end > 0) {
+                val actualCount = if (end >= 2 && Character.isLowSurrogate(toString()[end - 1])) 2 else requestedCount
+                val start = (end - actualCount).coerceAtLeast(0)
+                delete(start, end)
+                selection = TextRange(start)
+            }
+        }
+    }
+}
+
+/**
+ * Tabbed Search Hub implementation.
+ */
+class SearchScreen(private val sealedActivity: SealedLightActivity) : LightScreen<Station?, SearchViewModel>(sealedActivity) {
     override val viewModelClass = SearchViewModel::class.java
     override fun createViewModel() = SearchViewModel(lightContext.filesDir)
 
     @Composable
     override fun Content() {
         val results by viewModel.results.collectAsState()
+        val directUrl by viewModel.directUrlResult.collectAsState()
+        val directError by viewModel.directUrlError.collectAsState()
         val history by viewModel.searchHistory.collectAsState()
         val searching by viewModel.isSearching.collectAsState()
         val hasSearched by viewModel.hasPerformedSearch.collectAsState()
         val activeQuery by viewModel.activeQuery.collectAsState()
-
-        // Trigger search once when the screen is first shown
-        LaunchedEffect(query) {
-            if (!hasSearched) {
-                viewModel.search(query)
-            }
-        }
+        val mode by viewModel.mode.collectAsState()
+        val activeTab by viewModel.activeTab.collectAsState()
+        
+        val inputState = rememberTextFieldState(activeQuery)
+        val colors = LightThemeTokens.colors
+        val density = LocalDensity.current
 
         LightTheme(colors = LightThemeColors.Dark) {
-            val colors = LightThemeTokens.colors
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(colors.background)
-            ) {
-                LightTopBar(
-                    leftButton = LightBarButton.LightIcon(LightIcons.BACK, onClick = { goBack() }),
-                    center = LightTopBarCenter.Text("Results"),
-                    rightButton = LightBarButton.LightIcon(
-                        icon = LightIcons.SEARCH,
-                        onClick = { goBack() } // Go back to the entry screen
+            Surface {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    // 1. TOP BAR
+                    LightTopBar(
+                        leftButton = LightBarButton.LightIcon(LightIcons.BACK, onClick = { goBack() }),
+                        center = LightTopBarCenter.Text("Find stations"),
+                        rightButton = if (activeTab == SearchTab.Search && mode != SearchMode.Input) {
+                            LightBarButton.LightIcon(LightIcons.SEARCH, onClick = { viewModel.showInput() })
+                        } else null
                     )
-                )
 
-                Column(modifier = Modifier.padding(horizontal = 24.dp)) {
-                    if (searching) {
-                        LightText("Searching for \"$activeQuery\"...", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 16.dp))
-                    } else if (hasSearched && results.isEmpty()) {
-                        LightText("No results found for \"$activeQuery\"", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 16.dp))
-                    } else if (hasSearched) {
-                        LightText("Results for \"$activeQuery\"", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 16.dp))
+                    // 2. TABS
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp, vertical = 16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        TabItem("Search", activeTab == SearchTab.Search) { viewModel.setActiveTab(SearchTab.Search) }
+                        TabItem("History", activeTab == SearchTab.History) { viewModel.setActiveTab(SearchTab.History) }
                     }
 
-                    // List area
-                    LightScrollView(modifier = Modifier.weight(1f)) {
-                        Column {
-                            // Show Results
-                            results.forEach { station ->
-                                SearchResultRow(station) {
-                                    viewModel.selectStation(station)
-                                }
-                            }
-                            
-                            // Show History at the bottom or if no results
-                            if (!searching && (results.isEmpty() || history.isNotEmpty())) {
-                                Spacer(modifier = Modifier.height(32.dp))
-                                LightText("Recent searches", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 8.dp))
-                                history.forEach { item ->
-                                    HistoryRow(
-                                        query = item,
-                                        onSelect = { 
-                                            // Re-searching from history
-                                            viewModel.search(item)
+                    Column(modifier = Modifier.weight(1f)) {
+                        if (activeTab == SearchTab.Search) {
+                            if (mode == SearchMode.Input) {
+                                // 3. TYPING AREA (Identical to LightTextInputEditor Logic)
+                                var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
+                                
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 24.dp)
+                                        .pointerInput(Unit) {
+                                            awaitEachGesture {
+                                                val down = awaitFirstDown(requireUnconsumed = false)
+                                                textLayout?.let { layout ->
+                                                    inputState.edit { selection = TextRange(layout.getOffsetForPosition(down.position)) }
+                                                }
+                                                drag(down.id) { change ->
+                                                    textLayout?.let { layout ->
+                                                        inputState.edit { selection = TextRange(layout.getOffsetForPosition(change.position)) }
+                                                    }
+                                                    change.consume()
+                                                }
+                                            }
                                         },
-                                        onDelete = { viewModel.removeFromHistory(item) }
-                                    )
+                                    verticalArrangement = Arrangement.Top
+                                ) {
+                                    Box(contentAlignment = Alignment.TopStart) {
+                                        BasicText(
+                                            text = inputState.text.toString(),
+                                            style = LightThemeTokens.typography.copy.copy(color = colors.content),
+                                            onTextLayout = { textLayout = it },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+
+                                        // Static Indicator Box (Identical to Rename/Notes - matches "No blinking" requirement)
+                                        textLayout?.let { layout ->
+                                            // SDK blueprint coercion: uses layout text length for 100% safety
+                                            val cursorPos = inputState.selection.min.coerceIn(0, layout.layoutInput.text.length)
+                                            val rect = layout.getCursorRect(cursorPos)
+                                            Box(
+                                                modifier = Modifier
+                                                    .offset { IntOffset(rect.left.toInt(), rect.top.toInt()) }
+                                                    .width(2.dp)
+                                                    .height(with(density) { rect.height.toDp() })
+                                                    .background(colors.content),
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    // Native SDK Underline (3px)
+                                    Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(colors.content))
+                                }
+                            } else {
+                                ResultsListView(results, directUrl, directError, history, searching, hasSearched, activeQuery)
+                            }
+                        } else {
+                            HistoryListView(history, inputState)
+                        }
+                    }
+
+                    // 4. KEYBOARD (Using Safe SDK callback logic)
+                    if (activeTab == SearchTab.Search && mode == SearchMode.Input) {
+                        val keyboardCallback = remember(inputState) {
+                            OfficialSafeKeyboardCallback(inputState) { viewModel.search(inputState.text) }
+                        }
+                        
+                        val keyboardViewModel = viewModel<EnQwertyLp3KeyboardViewModel<Unit>>(
+                            key = "SearchHubKeyboard",
+                            factory = object : ViewModelProvider.Factory {
+                                @Suppress("UNCHECKED_CAST")
+                                override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                                    return EnQwertyLp3KeyboardViewModel<Unit>(
+                                        keyboardCallback,
+                                        keyboardOptionsFlow = MutableStateFlow(defaultKeyboardOptions()),
+                                        optionsForLayout = { LayoutOptions(!it.isRootLayout) }
+                                    ) as T
                                 }
                             }
+                        )
+                        LightEmbeddedLp3Keyboard(keyboardViewModel)
+                        LightBottomBar(items = listOf(LightBarButton.LightIcon(icon = LightIcons.SEARCH, onClick = { viewModel.search(inputState.text.toString()) })))
+                    }
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun RowScope.TabItem(text: String, isActive: Boolean, onClick: () -> Unit) {
+        val colors = LightThemeTokens.colors
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .lightClickable(onClick = onClick),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            LightText(
+                text = text,
+                variant = LightTextVariant.Subheading,
+            )
+            if (isActive) {
+                Box(
+                    modifier = Modifier
+                        .padding(top = 4.dp)
+                        .fillMaxWidth(0.6f)
+                        .height(2.dp)
+                        .background(colors.content)
+                )
+            }
+        }
+    }
+
+    @Composable
+    private fun ResultsListView(results: List<RadioBrowserStation>, directUrl: Station?, directError: String?, history: List<String>, searching: Boolean, hasSearched: Boolean, activeQuery: String) {
+        Column(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
+            if (searching) {
+                LightText("Searching for \"$activeQuery\"...", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 16.dp))
+            } else if (hasSearched && results.isEmpty() && directUrl == null) {
+                LightText(directError ?: "No results found", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 16.dp))
+            } else {
+                LightText("Results for \"$activeQuery\"", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 16.dp))
+            }
+            LightScrollView(modifier = Modifier.weight(1f)) {
+                Column {
+                    directUrl?.let { station ->
+                        SearchResultRow(RadioBrowserStation(station.name, station.url), isDirect = true) {
+                            viewModel.selectStation(RadioBrowserStation(station.name, station.url))
+                        }
+                    }
+                    results.forEach { station -> SearchResultRow(station) { viewModel.selectStation(station) } }
+                    
+                    if (!searching && history.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(32.dp))
+                        LightText("Recent searches", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 8.dp))
+                        history.forEach { item ->
+                            HistoryRow(query = item, onSelect = { viewModel.search(item) }, onDelete = { viewModel.removeFromHistory(item) })
                         }
                     }
                 }
@@ -233,21 +515,34 @@ class SearchResultsScreen(
     }
 
     @Composable
-    private fun SearchResultRow(station: RadioBrowserStation, onClick: () -> Unit) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .lightClickable(onClick = onClick)
-                .padding(vertical = 12.dp)
-        ) {
-            LightText(text = station.name, variant = LightTextVariant.Copy)
-            val details = mutableListOf<String>()
-            station.country?.takeIf { it.isNotBlank() }?.let { details.add(it) }
-            station.codec?.takeIf { it.isNotBlank() }?.let { details.add(it.uppercase()) }
-            station.bitrate?.takeIf { it > 0 }?.let { details.add("${it}kbps") }
-            if (details.isNotEmpty()) {
-                LightText(text = details.joinToString(" • "), variant = LightTextVariant.Fine)
+    private fun HistoryListView(history: List<String>, inputState: TextFieldState) {
+        Column(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
+            if (history.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    LightText("No recent searches", variant = LightTextVariant.Copy)
+                }
+            } else {
+                LightScrollView(modifier = Modifier.weight(1f)) {
+                    Column(modifier = Modifier.padding(top = 16.dp)) {
+                        history.forEach { item ->
+                            HistoryRow(query = item, onSelect = { 
+                                // Pre-fill the input and switch to search tab for editing
+                                inputState.edit { replace(0, length, item) }
+                                viewModel.setActiveTab(SearchTab.Search)
+                                viewModel.showInput()
+                            }, onDelete = { viewModel.removeFromHistory(item) })
+                        }
+                    }
+                }
             }
+        }
+    }
+
+    @Composable
+    private fun SearchResultRow(station: RadioBrowserStation, isDirect: Boolean = false, onClick: () -> Unit) {
+        Column(modifier = Modifier.fillMaxWidth().lightClickable(onClick = onClick).padding(vertical = 12.dp)) {
+            LightText(text = station.name.ifBlank { station.url }, variant = LightTextVariant.Copy)
+            LightText(text = if (isDirect) "Verified direct stream" else station.url, variant = LightTextVariant.Fine, maxLines = 1)
         }
     }
 
