@@ -2,38 +2,19 @@
 package com.thelightphone.radio
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.text.BasicText
-import androidx.compose.foundation.text.input.*
-import androidx.compose.material3.Surface
+import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.TextLayoutResult
-import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewModelScope
-import com.thelightphone.lp3Keyboard.ui.LayoutOptions
-import com.thelightphone.lp3Keyboard.ui.SpecialKey
-import com.thelightphone.lp3Keyboard.ui.viewmodel.EnQwertyLp3KeyboardViewModel
-import com.thelightphone.lp3Keyboard.ui.viewmodel.Lp3RepeatableKeyboardCallback
 import com.thelightphone.sdk.LightScreen
 import com.thelightphone.sdk.LightViewModel
 import com.thelightphone.sdk.SealedLightActivity
 import com.thelightphone.sdk.SimpleLightScreen
+import com.thelightphone.sdk.rememberKeyboardOptions
 import com.thelightphone.sdk.ui.*
-import com.thelightphone.sdk.ui.keyboard.LightEmbeddedLp3Keyboard
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.okhttp.OkHttp
@@ -42,7 +23,6 @@ import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.json
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
@@ -50,7 +30,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
-import kotlin.time.Duration.Companion.milliseconds
+import java.net.URLEncoder
 
 /**
  * Data model for the Radio Browser API response.
@@ -80,6 +60,36 @@ enum class SearchTab {
 enum class SearchMode {
     Input,
     Results
+}
+
+data class EditorRequest(
+    val title: String,
+    val initialValue: String,
+    val initialCaps: Boolean = false,
+)
+
+class SearchInputEditorScreen(
+    sealedActivity: SealedLightActivity,
+    private val editorRequest: EditorRequest
+) : SimpleLightScreen<String>(sealedActivity) {
+
+    @Composable
+    override fun Content() {
+        val textState = rememberTextFieldState(editorRequest.initialValue)
+        val themeColors by LightThemeController.colors.collectAsState()
+        val keyboardOptionsFlow = rememberKeyboardOptions()
+        LightTheme(colors = themeColors) {
+            LightTextInputEditor(
+                title = editorRequest.title,
+                state = textState,
+                keyboardOptionsFlow = keyboardOptionsFlow,
+                onSubmit = { result -> goBack(result.toString()) },
+                onBack = { goBack(null) },
+                modifier = Modifier.background(LightThemeTokens.colors.background),
+                initialCaps = editorRequest.initialCaps,
+            )
+        }
+    }
 }
 
 /**
@@ -175,11 +185,9 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
 
                 if (isLikelyAddress) {
                     var urlToTest = sanitizeUrl(name)
-                    // validateStreamUrl now uses execute {} to read ONLY headers and avoid infinite hangs
                     var isValid = validateStreamUrl(urlToTest)
                     
                     if (!isValid && !isIpAddress) {
-                        // For domain names, try common fallbacks
                         if (urlToTest.endsWith(";")) {
                             val cleanUrl = urlToTest.removeSuffix(";").removeSuffix("/")
                             if (validateStreamUrl(cleanUrl)) {
@@ -200,31 +208,26 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
                         directUrlResult.value = Station(name = "Untitled", url = urlToTest)
                         return@launch
                     } else if (isIpAddress) {
-                        // Strict single-pass fail for IPs to avoid multi-timeout "hangs"
                         directUrlError.value = "No results found"
                         return@launch
                     }
                 }
 
-                // Point 3: FLEXIBLE SEARCH ENGINE (Word order independent)
                 try {
                     val searchWords = name.split(" ").filter { it.isNotBlank() }
                     
-                    // 1. Try exact search first
-                    val encodedName = java.net.URLEncoder.encode(name, "UTF-8")
+                    val encodedName = URLEncoder.encode(name, "UTF-8")
                     val standardUrl = "https://de1.api.radio-browser.info/json/stations/search?name=$encodedName&limit=50&hidebroken=true&order=clickcount&reverse=true"
                     val standardResponse: List<RadioBrowserStation> = client.get(standardUrl).body()
                     
                     if (standardResponse.size >= 5) {
                         results.value = standardResponse
                     } else {
-                        // 2. BROAD FALLBACK: If few results, search by most unique word and filter locally
                         val significantWord = searchWords.maxByOrNull { it.length } ?: name
-                        val encodedWord = java.net.URLEncoder.encode(significantWord, "UTF-8")
+                        val encodedWord = URLEncoder.encode(significantWord, "UTF-8")
                         val broadUrl = "https://de1.api.radio-browser.info/json/stations/search?name=$encodedWord&limit=100&hidebroken=true&order=clickcount&reverse=true"
                         val broadResponse: List<RadioBrowserStation> = client.get(broadUrl).body()
                         
-                        // Filter locally to ensure ALL search words are present in any order
                         val filtered = broadResponse.filter { station ->
                             searchWords.all { word -> 
                                 station.name.contains(word, ignoreCase = true) || 
@@ -232,7 +235,6 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
                             }
                         }
                         
-                        // Combine results, prioritizing standard ones
                         results.value = (standardResponse + filtered).distinctBy { it.url }
                     }
                 } catch (e: Exception) {
@@ -246,7 +248,6 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
 
     private suspend fun validateStreamUrl(urlString: String): Boolean {
         return try {
-            // Using prepareRequest + execute ensures we ONLY read the headers
             client.prepareRequest {
                 url(urlString)
                 method = HttpMethod.Get
@@ -261,7 +262,6 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
                 val status = response.status
                 if (status.isSuccess() || status == HttpStatusCode.MovedPermanently || status == HttpStatusCode.Found) {
                     val contentType = response.contentType()?.toString()?.lowercase() ?: ""
-                    // Only accept audio/playlist streams (filters out webpages)
                     contentType.contains("audio") || 
                     contentType.contains("mpegurl") || 
                     contentType.contains("application/ogg") ||
@@ -312,71 +312,27 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
 }
 
 /**
- * Safe keyboard callback replicating the official SDK logic exactly.
- */
-class OfficialSafeKeyboardCallback(
-    private val state: TextFieldState,
-    private val onReturn: () -> Unit
-) : Lp3RepeatableKeyboardCallback {
-    override fun onKeyPressed(code: Int) {}
-    override fun onSpecialKeyPressed(key: SpecialKey) {
-        if (key == SpecialKey.Space) insertAtCursor(" ")
-    }
-    override fun onKeyReleased(code: Int) { insertAtCursor(buildString { appendCodePoint(code) }) }
-    override fun onSpecialKeyReleased(key: SpecialKey) {
-        when (key) {
-            SpecialKey.Backspace -> deleteBeforeCursor(1)
-            SpecialKey.Return -> onReturn()
-            else -> Unit
-        }
-    }
-    override fun onKeyRepeated(code: Int) { onKeyReleased(code) }
-    override fun onSpecialKeyRepeated(specialKey: SpecialKey) { if (specialKey == SpecialKey.Backspace) deleteBeforeCursor(1) }
-    override fun onKeyLongPressed(code: Int) {}
-    override fun onSpecialKeyLongPressed(key: SpecialKey) {
-        if (key == SpecialKey.Backspace) {
-            state.edit {
-                val end = selection.min.coerceIn(0, length)
-                if (end > 0) {
-                    val textBefore = toString().substring(0, end)
-                    val lastSpace = textBefore.trimEnd().lastIndexOf(' ')
-                    val start = if (lastSpace >= 0) lastSpace + 1 else 0
-                    delete(start, end)
-                    selection = TextRange(start)
-                }
-            }
-        }
-    }
-    override fun onSubmitWord(word: CharSequence) { insertAtCursor(word.toString()) }
-
-    private fun insertAtCursor(text: String) {
-        state.edit {
-            val start = selection.min.coerceIn(0, length)
-            val end = selection.max.coerceIn(0, length)
-            replace(start, end, text)
-            selection = TextRange(start + text.length)
-        }
-    }
-
-    private fun deleteBeforeCursor(count: Int) {
-        state.edit {
-            val end = selection.min.coerceIn(0, length)
-            if (end > 0) {
-                val actualCount = if (end >= 2 && Character.isLowSurrogate(toString()[end - 1])) 2 else count
-                val start = (end - actualCount).coerceAtLeast(0)
-                delete(start, end)
-                selection = TextRange(start)
-            }
-        }
-    }
-}
-
-/**
  * Tabbed Search Hub implementation.
  */
 class SearchScreen(private val sealedActivity: SealedLightActivity) : LightScreen<Station?, SearchViewModel>(sealedActivity) {
     override val viewModelClass = SearchViewModel::class.java
     override fun createViewModel() = SearchViewModel(lightContext.filesDir)
+
+    private fun openEditor(initialValue: String) {
+        val editorRequest = EditorRequest(
+            title = "Search",
+            initialValue = initialValue,
+            initialCaps = false,
+        )
+        navigateTo(
+            screenFactory = { SearchInputEditorScreen(it, editorRequest) },
+            resultCallback = { query ->
+                if (query.isNotBlank()) {
+                    viewModel.search(query)
+                }
+            }
+        )
+    }
 
     @Composable
     override fun Content() {
@@ -389,116 +345,56 @@ class SearchScreen(private val sealedActivity: SealedLightActivity) : LightScree
         val activeQuery by viewModel.activeQuery.collectAsState()
         val mode by viewModel.mode.collectAsState()
         val activeTab by viewModel.activeTab.collectAsState()
-        
-        val inputState = rememberTextFieldState(activeQuery)
-        val colors = LightThemeTokens.colors
-        val density = LocalDensity.current
 
         LightTheme(colors = LightThemeColors.Dark) {
-            Surface {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    // 1. TOP BAR
-                    LightTopBar(
-                        leftButton = LightBarButton.LightIcon(LightIcons.BACK, onClick = { goBack() }),
-                        center = LightTopBarCenter.Text("Find stations"),
-                        rightButton = if (activeTab == SearchTab.Search && mode != SearchMode.Input) {
-                            LightBarButton.LightIcon(LightIcons.SEARCH, onClick = { viewModel.showInput() })
-                        } else null
-                    )
+            val colors = LightThemeTokens.colors
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(colors.background)
+            ) {
+                // 1. TOP BAR
+                LightTopBar(
+                    leftButton = LightBarButton.LightIcon(LightIcons.BACK, onClick = { goBack() }),
+                    center = LightTopBarCenter.Text("Find stations"),
+                    rightButton = if (activeTab == SearchTab.Search && mode != SearchMode.Input) {
+                        LightBarButton.LightIcon(LightIcons.SEARCH, onClick = { viewModel.showInput() })
+                    } else null
+                )
 
-                    // 2. TABS
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 24.dp, vertical = 16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        TabItem("Search", activeTab == SearchTab.Search) { viewModel.setActiveTab(SearchTab.Search) }
-                        TabItem("History", activeTab == SearchTab.History) { viewModel.setActiveTab(SearchTab.History) }
-                    }
+                // 2. TABS
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    TabItem("Search", activeTab == SearchTab.Search) { viewModel.setActiveTab(SearchTab.Search) }
+                    TabItem("History", activeTab == SearchTab.History) { viewModel.setActiveTab(SearchTab.History) }
+                }
 
-                    Column(modifier = Modifier.weight(1f)) {
-                        if (activeTab == SearchTab.Search) {
-                            if (mode == SearchMode.Input) {
-                                // 3. TYPING AREA (Official SDK Replication - Exact Parity with Rename)
-                                var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
-                                
-                                Column(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 24.dp)
-                                        .pointerInput(Unit) {
-                                            awaitEachGesture {
-                                                val down = awaitFirstDown(requireUnconsumed = false)
-                                                textLayout?.let { layout ->
-                                                    inputState.edit { selection = TextRange(layout.getOffsetForPosition(down.position)) }
-                                                }
-                                                drag(down.id) { change ->
-                                                    textLayout?.let { layout ->
-                                                        inputState.edit { selection = TextRange(layout.getOffsetForPosition(change.position)) }
-                                                    }
-                                                    change.consume()
-                                                }
-                                            }
-                                        },
-                                    verticalArrangement = Arrangement.Top
-                                ) {
-                                    Box(contentAlignment = Alignment.TopStart) {
-                                        BasicText(
-                                            text = inputState.text.toString(),
-                                            style = LightThemeTokens.typography.copy.copy(color = colors.content),
-                                            onTextLayout = { textLayout = it },
-                                            modifier = Modifier.fillMaxWidth()
-                                        )
-
-                                        // Static Indicator Box (Identical to Rename/Notes - matches "No blinking" requirement)
-                                        textLayout?.let { layout ->
-                                            // SDK blueprint coercion: uses layout text length for 100% safety
-                                            val cursorPos = inputState.selection.min.coerceIn(0, layout.layoutInput.text.length)
-                                            val rect = layout.getCursorRect(cursorPos)
-                                            Box(
-                                                modifier = Modifier
-                                                    .offset { IntOffset(rect.left.toInt(), rect.top.toInt()) }
-                                                    .width(2.dp)
-                                                    .height(with(density) { rect.height.toDp() })
-                                                    .background(colors.content),
-                                            )
-                                        }
-                                    }
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    // Native SDK Underline (3px)
-                                    Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(colors.content))
-                                }
-                            } else {
-                                ResultsListView(results, directUrl, directError, history, searching, hasSearched, activeQuery, inputState)
+                Column(modifier = Modifier.weight(1f)) {
+                    if (activeTab == SearchTab.Search) {
+                        if (mode == SearchMode.Input) {
+                            // 3. LIGHT TEXT FIELD INPUT SCREEN
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 24.dp, vertical = 16.dp)
+                            ) {
+                                LightTextField(
+                                    label = "Search:",
+                                    value = activeQuery,
+                                    placeholder = "search station or url",
+                                    onClick = { openEditor(activeQuery) },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
                             }
                         } else {
-                            HistoryListView(history, inputState)
+                            ResultsListView(results, directUrl, directError, searching, hasSearched, activeQuery)
                         }
-                    }
-
-                    // 4. KEYBOARD (Using Safe SDK callback logic)
-                    if (activeTab == SearchTab.Search && mode == SearchMode.Input) {
-                        val keyboardCallback = remember(inputState) {
-                            OfficialSafeKeyboardCallback(inputState) { viewModel.search(inputState.text) }
-                        }
-                        
-                        val keyboardViewModel = viewModel<EnQwertyLp3KeyboardViewModel<Unit>>(
-                            key = "SearchHubKeyboard",
-                            factory = object : ViewModelProvider.Factory {
-                                @Suppress("UNCHECKED_CAST")
-                                override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                                    return EnQwertyLp3KeyboardViewModel<Unit>(
-                                        keyboardCallback,
-                                        keyboardOptionsFlow = MutableStateFlow(defaultKeyboardOptions()),
-                                        optionsForLayout = { LayoutOptions(!it.isRootLayout) }
-                                    ) as T
-                                }
-                            }
-                        )
-                        LightEmbeddedLp3Keyboard(keyboardViewModel)
-                        LightBottomBar(items = listOf(LightBarButton.LightIcon(icon = LightIcons.SEARCH, onClick = { viewModel.search(inputState.text.toString()) })))
+                    } else {
+                        HistoryListView(history)
                     }
                 }
             }
@@ -531,7 +427,7 @@ class SearchScreen(private val sealedActivity: SealedLightActivity) : LightScree
     }
 
     @Composable
-    private fun ResultsListView(results: List<RadioBrowserStation>, directUrl: Station?, directError: String?, history: List<String>, searching: Boolean, hasSearched: Boolean, activeQuery: String, inputState: TextFieldState) {
+    private fun ResultsListView(results: List<RadioBrowserStation>, directUrl: Station?, directError: String?, searching: Boolean, hasSearched: Boolean, activeQuery: String) {
         Column(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
             if (searching) {
                 LightText("Searching for \"$activeQuery\"...", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 16.dp))
@@ -548,26 +444,13 @@ class SearchScreen(private val sealedActivity: SealedLightActivity) : LightScree
                         }
                     }
                     results.forEach { station -> SearchResultRow(station) { viewModel.selectStation(station) } }
-                    
-                    if (!searching && history.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(32.dp))
-                        LightText("Recent searches", variant = LightTextVariant.Detail, modifier = Modifier.padding(vertical = 8.dp))
-                        history.forEach { item ->
-                            HistoryRow(query = item, onSelect = { 
-                                // Pre-fill the input and switch to search tab for editing
-                                inputState.edit { replace(0, length, item) }
-                                viewModel.setActiveTab(SearchTab.Search)
-                                viewModel.showInput()
-                            }, onDelete = { viewModel.removeFromHistory(item) })
-                        }
-                    }
                 }
             }
         }
     }
 
     @Composable
-    private fun HistoryListView(history: List<String>, inputState: TextFieldState) {
+    private fun HistoryListView(history: List<String>) {
         Column(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
             if (history.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -578,10 +461,7 @@ class SearchScreen(private val sealedActivity: SealedLightActivity) : LightScree
                     Column(modifier = Modifier.padding(top = 16.dp)) {
                         history.forEach { item ->
                             HistoryRow(query = item, onSelect = { 
-                                // Pre-fill the input and switch to search tab for editing
-                                inputState.edit { replace(0, length, item) }
-                                viewModel.setActiveTab(SearchTab.Search)
-                                viewModel.showInput()
+                                openEditor(item)
                             }, onDelete = { viewModel.removeFromHistory(item) })
                         }
                     }
