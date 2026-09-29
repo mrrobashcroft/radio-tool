@@ -15,6 +15,7 @@ images:
   - Library 02 Recent.png
   - Radio Tool Snapshots.png
   - Rename Station
+  - Search 00 Find stations
   - Search 01 Input.png
   - Search 02 Results.png
   - Search 03 History.png
