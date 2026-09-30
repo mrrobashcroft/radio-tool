@@ -302,7 +302,6 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
         currentScreen?.goBack(Station(name, streamUrl))
     }
 
-    fun showInput() { mode.value = SearchMode.Input }
     fun setActiveTab(tab: SearchTab) { activeTab.value = tab }
 
     override fun onCleared() {
@@ -357,9 +356,7 @@ class SearchScreen(private val sealedActivity: SealedLightActivity) : LightScree
                 LightTopBar(
                     leftButton = LightBarButton.LightIcon(LightIcons.BACK, onClick = { goBack() }),
                     center = LightTopBarCenter.Text("Find stations"),
-                    rightButton = if (activeTab == SearchTab.Search && mode != SearchMode.Input) {
-                        LightBarButton.LightIcon(LightIcons.SEARCH, onClick = { viewModel.showInput() })
-                    } else null
+                    rightButton = null
                 )
 
                 // 2. TABS
@@ -396,6 +393,18 @@ class SearchScreen(private val sealedActivity: SealedLightActivity) : LightScree
                     } else {
                         HistoryListView(history)
                     }
+                }
+
+                // Bottom bar for Results mode ("NEW SEARCH" button matching SUBMIT style)
+                if (activeTab == SearchTab.Search && mode == SearchMode.Results) {
+                    LightBottomBar(
+                        items = listOf(
+                            LightBarButton.Text(
+                                text = "NEW SEARCH",
+                                onClick = { openEditor("") }
+                            )
+                        )
+                    )
                 }
             }
         }
