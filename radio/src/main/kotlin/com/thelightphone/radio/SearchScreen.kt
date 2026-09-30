@@ -382,7 +382,7 @@ class SearchScreen(private val sealedActivity: SealedLightActivity) : LightScree
                                 LightTextField(
                                     label = "Search:",
                                     value = activeQuery,
-                                    placeholder = "search station or url",
+                                    placeholder = "keywords, station, or IP",
                                     onClick = { openEditor(activeQuery) },
                                     modifier = Modifier.fillMaxWidth()
                                 )
