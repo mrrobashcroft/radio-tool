@@ -61,7 +61,7 @@ dependencies {
     implementation(project(":sdk:client"))
     implementation(libs.androidx.media3.common)
     implementation(libs.androidx.media3.exoplayer)
-    implementation("androidx.media3:media3-exoplayer-hls:1.10.1") // HLS streaming support
+    implementation("androidx.media3:media3-exoplayer-hls:1.10.1") // HLS streaming support - update
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.ktor.client.core)
     implementation(libs.ktor.client.okhttp)
