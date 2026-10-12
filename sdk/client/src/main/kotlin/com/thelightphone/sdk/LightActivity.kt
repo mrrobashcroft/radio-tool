@@ -93,6 +93,9 @@ class LightActivity internal constructor() : ComponentActivity() {
         }
         super.onCreate(savedInstanceState)
 
+        // Avoids a stale-content flash when resuming from a stopped task (if false)
+        setRecentsScreenshotEnabled(LightSdkRegistry.entryPoint?.enableRecentsScreenshots == true)
+
         WindowCompat.setDecorFitsSystemWindows(window, false)
         val controller = WindowInsetsControllerCompat(window, window.decorView)
         controller.hide(WindowInsetsCompat.Type.systemBars())
@@ -144,11 +147,7 @@ class LightActivity internal constructor() : ComponentActivity() {
     }
 
     private val Int.isSystemKeyCode: Boolean
-        get() = (this == KeyEvent.KEYCODE_BACK || 
-                 this == KeyEvent.KEYCODE_HOME ||
-                 this == KeyEvent.KEYCODE_VOLUME_UP ||
-                 this == KeyEvent.KEYCODE_VOLUME_DOWN ||
-                 this == KeyEvent.KEYCODE_VOLUME_MUTE)
+        get() = (this == KeyEvent.KEYCODE_BACK || this == KeyEvent.KEYCODE_HOME)
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         // don't do anything with android keys
@@ -231,13 +230,16 @@ class SealedLightContext(internal val androidContext: Context) {
     val dataStore: DataStore<Preferences> by lazy{ androidContext.dataStore }
     val filesDir: File by lazy{ androidContext.filesDir }
     val fileShare: LightFileShare by lazy { LightFileShare(androidContext) }
+    val connectivity: LightConnectivity by lazy { LightConnectivity(androidContext) }
     fun readAsset(path: String): ByteArray = androidContext.assets.open(path).use { it.readBytes() }
 }
 /**
  * Wrapper class to pass around an instance of LightActivity without exposing it to
  * user code. Sorry! :)
  */
-class SealedLightActivity(internal val activity: LightActivity)
+class SealedLightActivity(internal val activity: LightActivity) {
+    val vibrator: LightVibrator by lazy { ContextLightVibrator(activity.applicationContext) }
+}
 
 internal val Context.dataStore by preferencesDataStore(
     name = "DEFAULT_DATASTORE"

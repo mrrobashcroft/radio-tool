@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    android:sharedUserId="com.thelightphone.sdk">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <application
         android:name=".EmulatorApplication"
@@ -25,5 +24,10 @@
             android:exported="true"
             android:label="Light SDK Permission"
             android:theme="@style/LightEmulator.Theme.Permission" />
+        <activity
+            android:name=".ToolManagerActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:label="Tool Manager" />
     </application>
 </manifest>

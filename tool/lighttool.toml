@@ -1,15 +1,14 @@
 [tool]
 id = "com.thelightphone.radio"
 label = "Radio"
-versionCode = 7
-versionName = "1.1.4"
+versionCode = 8
+versionName = "1.2.0"
 permissions = [
     "android.permission.INTERNET",
     "android.permission.POST_NOTIFICATIONS",
-    "android.permission.WAKE_LOCK",
-    "android.permission.FOREGROUND_SERVICE",
-    "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+    "android.permission.WAKE_LOCK"
 ]
+capabilities = ["detached-audio", "cleartext-http"]
 serverPackage = "com.thelightphone.sdk.emulator"
 sharedUserId = "com.thelightphone.sdk"
 orientation = "portrait"

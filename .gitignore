@@ -51,6 +51,5 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
-# User-specific
-tuner/
-.artifacts/
+### Signing keys ###
+/signer/keys/

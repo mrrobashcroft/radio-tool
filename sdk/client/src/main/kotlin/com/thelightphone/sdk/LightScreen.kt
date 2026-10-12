@@ -46,14 +46,6 @@ abstract class SimpleLightScreen<ResultType>(sealedActivity: SealedLightActivity
         this.result = result
         activity.goBack()
     }
-
-    /**
-     * Minimizes the tool activity without finishing it, allowing background tasks
-     * like audio playback to continue uninterrupted.
-     */
-    fun minimize() {
-        activity.moveTaskToBack(true)
-    }
 }
 
 abstract class LightScreen<ResultType, VM : LightViewModel<ResultType>>(

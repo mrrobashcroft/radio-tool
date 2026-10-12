@@ -51,7 +51,7 @@ dependencies {
     api(libs.compose.activity)
     api(libs.kotlinx.coroutines)
     api(libs.androidx.lifecycle.viewmodel)
-    api(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
     api(libs.androidx.datastore.preferences)
     api(libs.ktor.client.core)
     api(libs.ktor.client.okhttp)
@@ -64,7 +64,8 @@ dependencies {
     implementation(libs.androidx.work.runtime)
     implementation(libs.androidx.media3.common)
     implementation(libs.androidx.media3.exoplayer)
-    api(libs.androidx.media3.session)
+    implementation(libs.androidx.media3.session)
+    api(libs.light.toolmanager.client)
     lintChecks(project(":lint-rules"))
 
     testImplementation(libs.kotlin.test)

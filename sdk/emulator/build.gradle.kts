@@ -13,16 +13,14 @@ android {
     val platformKeystore = file("keys/platform.jks")
     val hasPlatformKey = platformKeystore.exists()
 
-    signingConfigs {
-        create("lightsdkDev") {
-            storeFile = file("../keys/lightsdk-dev.jks")
-            storePassword = "android"
-            keyAlias = "lightsdk-dev"
-            keyPassword = "android"
-            enableV3Signing = true
-            enableV4Signing = true
-        }
-        if (hasPlatformKey) {
+    if (!hasPlatformKey) {
+        logger.warn("WARNING: Platform keystore not found at sdk/emulator/keys/platform.jks")
+        logger.warn("The emulator app will not run as uid 1000 without platform signing.")
+        logger.warn("See README.md for instructions on generating the keystore.")
+    }
+
+    if (hasPlatformKey) {
+        signingConfigs {
             create("platform") {
                 storeFile = platformKeystore
                 storePassword = "android"
@@ -32,12 +30,6 @@ android {
                 enableV4Signing = true
             }
         }
-    }
-
-    if (!hasPlatformKey) {
-        logger.warn("WARNING: Platform keystore not found at sdk/emulator/keys/platform.jks")
-        logger.warn("The emulator app will not run as uid 1000 without platform signing.")
-        logger.warn("See README.md for instructions on generating the keystore.")
     }
 
     val localProps = Properties().apply {
@@ -60,10 +52,10 @@ android {
 
     buildTypes {
         debug {
-            signingConfig = if (hasPlatformKey) signingConfigs.getByName("platform") else signingConfigs.getByName("lightsdkDev")
+            if (hasPlatformKey) signingConfig = signingConfigs.getByName("platform")
         }
         release {
-            signingConfig = if (hasPlatformKey) signingConfigs.getByName("platform") else signingConfigs.getByName("lightsdkDev")
+            if (hasPlatformKey) signingConfig = signingConfigs.getByName("platform")
         }
     }
 
@@ -99,5 +91,4 @@ dependencies {
     implementation(libs.ktor.server.content.negotiation)
     implementation(libs.ktor.serialization.json)
     implementation(libs.androidx.splashscreen)
-    implementation(libs.androidx.media3.session)
 }

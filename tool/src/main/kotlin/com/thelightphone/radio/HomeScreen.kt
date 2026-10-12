@@ -19,7 +19,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.media3.common.Player
 import com.thelightphone.sdk.InitialScreen
 import com.thelightphone.sdk.LightScreen
 import com.thelightphone.sdk.LightViewModel
@@ -27,7 +26,9 @@ import com.thelightphone.sdk.SealedLightActivity
 import com.thelightphone.sdk.SimpleLightScreen
 import com.thelightphone.sdk.audio.DefaultLightAudio
 import com.thelightphone.sdk.audio.LightAudioItem
+import com.thelightphone.sdk.audio.LightAudioPlayback
 import com.thelightphone.sdk.audio.LightAudioPlayer
+import com.thelightphone.sdk.audio.LightAudioPlayerAvailability
 import com.thelightphone.sdk.audio.LightAudioSource
 import com.thelightphone.sdk.audio.LightMediaMetadata
 import com.thelightphone.sdk.callRemoteServiceMethod
@@ -41,6 +42,13 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.serializer
+
+private object OpenBluetoothSettings : LightServiceMethod.CustomServiceMethod<Unit, Unit>() {
+    override val id = "OpenBluetoothSettings"
+    override val requestSerializer = serializer<Unit>()
+    override val responseSerializer = serializer<Unit>()
+}
 
 /**
  * Data model for a radio station.
@@ -59,7 +67,7 @@ class RadioViewModel(
 ) : LightViewModel<Unit>() {
     // SDK provided audio player wrapper
     private val audio = DefaultLightAudio(sealedActivity)
-    private val player: LightAudioPlayer = audio.newPlayer()
+    private val player: LightAudioPlayer = audio.newPlayer(playback = LightAudioPlayback.Detached)
     
     // File paths for local persistence
     private val stationsFile = File(filesDir, "stations.json")
@@ -76,7 +84,7 @@ class RadioViewModel(
     
     // Playback state forwarded from the SDK player
     val isPlaying = player.isPlaying
-    val playbackState = player.playbackState
+    val availability = player.availability
     val error = player.error
     val isFavourite = MutableStateFlow(false)
     
@@ -204,7 +212,7 @@ class RadioViewModel(
     /** Toggles playback of the current station URL. */
     fun togglePlayback() {
         if (isPlaying.value) {
-            player.stop()
+            player.pause()
         } else {
             val sanitizedUrl = sanitizeUrl(streamUrl.value)
             val station = Station(stationName.value, sanitizedUrl)
@@ -365,13 +373,12 @@ class RadioViewModel(
     fun openBluetooth() {
         viewModelScope.launch {
             // This relies on the LightOS server implementing this custom bridge method.
-            callRemoteServiceMethod(LightServiceMethod.OpenBluetoothSettings, Unit)
+            callRemoteServiceMethod(OpenBluetoothSettings, Unit)
         }
     }
 
     override fun onBackPressed(): Boolean {
-        currentScreen?.minimize()
-        return true
+        return false
     }
 
     override fun onCleared() {
@@ -397,16 +404,16 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
         // Collect observable state from the ViewModel
         val name by viewModel.stationName.collectAsState()
         val playing by viewModel.isPlaying.collectAsState()
-        val state by viewModel.playbackState.collectAsState()
+        val availability by viewModel.availability.collectAsState()
         val error by viewModel.error.collectAsState()
         val isFavourite by viewModel.isFavourite.collectAsState()
         val themeColors by LightThemeController.colors.collectAsState()
 
-        // Derive user-friendly status text from ExoPlayer states
+        // Derive user-friendly status text
         val statusText = when {
             error != null -> "Error loading stream"
-            playing && state == Player.STATE_READY -> "Playing Live Stream..."
-            state == Player.STATE_BUFFERING -> "Connecting..."
+            playing -> "Playing Live Stream..."
+            availability == LightAudioPlayerAvailability.Initializing -> "Connecting..."
             else -> "Stopped"
         }
 
@@ -420,7 +427,7 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
             ) {
                 // Top Bar with standard back button and tool title
                 LightTopBar(
-                    leftButton = LightBarButton.LightIcon(LightIcons.BACK, onClick = { minimize() }),
+                    leftButton = LightBarButton.LightIcon(LightIcons.BACK, onClick = { goBack() }),
                     center = LightTopBarCenter.Text("Radio")
                 )
 

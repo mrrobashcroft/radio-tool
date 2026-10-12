@@ -1,6 +1,5 @@
 package com.thelightphone.sdk.emulator
 
-import android.content.ComponentName
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
@@ -18,7 +17,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Surface
@@ -34,18 +32,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.media3.common.MediaMetadata
-import androidx.media3.common.Player
-import androidx.media3.session.SessionToken
+import com.thelightphone.sdk.emulator.Nav.*
 import com.thelightphone.sdk.server.LightSdkServer
-import com.google.common.util.concurrent.ListenableFuture
-import com.google.common.util.concurrent.MoreExecutors
 import com.thelightphone.sdk.server.LightSdkServer.queryEnabledClients
 import com.thelightphone.sdk.server.LightSdkServer.runningAsSystemApp
 import com.thelightphone.sdk.server.LightSdkServerSettings
@@ -57,10 +50,8 @@ import com.thelightphone.sdk.ui.LightTextVariant
 import com.thelightphone.sdk.ui.LightTheme
 import com.thelightphone.sdk.ui.LightThemeColors
 import com.thelightphone.sdk.ui.LightThemeController
-import com.thelightphone.sdk.ui.LocalLightColors
 import com.thelightphone.sdk.ui.gridUnitsAsDp
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -68,10 +59,6 @@ import java.time.format.DateTimeFormatter
 class MainActivity : ComponentActivity() {
 
     val lightAudioManager get() = (application as EmulatorApplication).lightAudioManager
-    private var mediaControllerFuture: ListenableFuture<androidx.media3.session.MediaController>? = null
-    private var mediaController: androidx.media3.session.MediaController? = null
-    private val activeMediaMetadata = MutableStateFlow<MediaMetadata?>(null)
-    private val isMediaPlaying = MutableStateFlow(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -87,7 +74,6 @@ class MainActivity : ComponentActivity() {
             )
         }
         val serverSettings = LightSdkServer.provideSdkSettings(this)
-        setupMediaController()
         setContent {
             val themeColors by LightThemeController.colors.collectAsState()
             LightTheme(colors = themeColors) {
@@ -100,72 +86,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun setupMediaController() {
-        LightSdkServer.onMediaSessionRegistered = { packageName, active ->
-            if (active) {
-                connectToSession(packageName)
-            } else {
-                disconnectFromSession(packageName)
-            }
-        }
-    }
-
-    private fun connectToSession(packageName: String) {
-        val sessionToken = SessionToken(this, ComponentName(packageName, "com.thelightphone.sdk.audio.LightMediaService"))
-        mediaControllerFuture = androidx.media3.session.MediaController.Builder(this, sessionToken).buildAsync()
-        mediaControllerFuture?.addListener({
-            try {
-                val controller = mediaControllerFuture?.get()
-                mediaController = controller
-                controller?.addListener(object : Player.Listener {
-                    override fun onMediaMetadataChanged(metadata: MediaMetadata) {
-                        activeMediaMetadata.value = metadata
-                    }
-
-                    override fun onIsPlayingChanged(playing: Boolean) {
-                        isMediaPlaying.value = playing
-                    }
-                })
-                activeMediaMetadata.value = controller?.mediaMetadata
-                isMediaPlaying.value = controller?.isPlaying == true
-            } catch (e: Exception) {
-                Log.e("LightEmulator", "Failed to connect to MediaController", e)
-            }
-        }, MoreExecutors.directExecutor())
-    }
-
-    private fun disconnectFromSession(packageName: String) {
-        if (mediaController?.connectedToken?.packageName == packageName) {
-            mediaController?.release()
-            mediaController = null
-            activeMediaMetadata.value = null
-            isMediaPlaying.value = false
-        }
-    }
-
     @Composable
     private fun PrimaryUI(
         serverSettings: LightSdkServerSettings,
         lightAudioManager: LightAudioManager
     ) {
         val currentNav by EmulatorNavController.currentNav.collectAsState()
-        val metadata by activeMediaMetadata.collectAsState(null)
-        val isPlaying by isMediaPlaying.collectAsState(false)
-
         when (val navSnapshot = currentNav) {
             Nav.LockScreen -> {
-                LightLockscreen(
-                    metadata = metadata,
-                    isPlaying = isPlaying,
-                    onToggle = { if (isPlaying) mediaController?.pause() else mediaController?.play() },
-                    onStop = {
-                        mediaController?.stop()
-                        mediaController?.release()
-                        mediaController = null
-                        activeMediaMetadata.value = null
-                        isMediaPlaying.value = false
-                    }
-                ) {
+                LightLockscreen {
                     EmulatorNavController.navigateTo(Nav.Toolbox)
                 }
             }
@@ -192,7 +121,8 @@ class MainActivity : ComponentActivity() {
                         }
                     }, launchDefaultTool = {
                         when (it) {
-                            DefaultTool.Settings -> EmulatorNavController.navigateTo(Nav.Settings())
+                            DefaultTool.Settings -> EmulatorNavController.navigateTo(Settings())
+                            DefaultTool.ToolManager -> LightSdkServer.foregroundToolManagerUi(this)
                         }
                     })
             }
@@ -211,11 +141,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onDestroy() {
-        mediaController?.release()
-        super.onDestroy()
-    }
-
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         val screenTurnedOff =
@@ -230,11 +155,13 @@ private sealed class Tool(val label: String)
 private class ExternalTool(label: String, val packageName: String) : Tool(label)
 private sealed class DefaultTool(label: String) : Tool(label) {
     object Settings : DefaultTool("Settings")
+    object ToolManager : DefaultTool("Tool Manager")
 }
 
 
 private val defaultTools: List<Tool> = listOf(
-    DefaultTool.Settings
+    DefaultTool.Settings,
+    DefaultTool.ToolManager
 )
 
 @Composable
@@ -252,7 +179,8 @@ private fun ToolList(
             pages.getOrNull(currentPageIndex) ?: pages.first()
         }
     }
-    LaunchedEffect(Unit) {
+    val refreshCount by EmulatorApplication.installedToolsRefreshCount.collectAsState()
+    LaunchedEffect(refreshCount) {
         val externalTools = fetchExternalTools()
         pages = (defaultTools + externalTools).chunked(toolPageSize)
     }
@@ -269,7 +197,7 @@ private fun ToolList(
                     }
                 }
             ),
-            verticalArrangement = Arrangement.spacedBy(18.dp, Alignment.CenterVertically),
+            verticalArrangement = Arrangement.spacedBy(22.dp, Alignment.CenterVertically),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             for (tool in currentPage) {
@@ -289,13 +217,7 @@ private fun ToolList(
 }
 
 @Composable
-private fun LightLockscreen(
-    metadata: MediaMetadata?,
-    isPlaying: Boolean,
-    onToggle: () -> Unit,
-    onStop: () -> Unit,
-    onUnlockClicked: () -> Unit
-) {
+private fun LightLockscreen(onUnlockClicked: () -> Unit) {
     Surface {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -325,36 +247,11 @@ private fun LightLockscreen(
                 }
 
                 val formatter = remember { DateTimeFormatter.ofPattern("h:mm") }
-                
-                // Clock stays at a fixed bias position
                 LightText(
                     time.format(formatter),
                     variant = LightTextVariant.Title,
                     modifier = Modifier.align(BiasAlignment(0f, -0.1f))
                 )
-                
-                // Controls appear below the clock without shifting it
-                if (metadata != null || isPlaying) {
-                    Box(
-                        modifier = Modifier.align(BiasAlignment(0f, 0.35f))
-                    ) {
-                        if (isPlaying) {
-                            Box(Modifier.clickable(onClick = onToggle).padding(8.dp)) {
-                                LightIcon(icon = LightIcons.PAUSE, size = 2f)
-                            }
-                        } else {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(Modifier.clickable(onClick = onStop).padding(8.dp)) {
-                                    LightIcon(icon = LightIcons.STOP, size = 2f)
-                                }
-                                Spacer(Modifier.width(32.dp))
-                                Box(Modifier.clickable(onClick = onToggle).padding(8.dp)) {
-                                    LightIcon(icon = LightIcons.PLAY, size = 2f)
-                                }
-                            }
-                        }
-                    }
-                }
             }
             Box(Modifier.clickable(onClick = onUnlockClicked)) {
                 LightIcon(
@@ -370,12 +267,7 @@ private fun LightLockscreen(
 @Composable
 fun LockScreenPreview() {
     LightTheme(colors = LightThemeColors.Dark) {
-        LightLockscreen(
-            metadata = null,
-            isPlaying = false,
-            onToggle = {},
-            onStop = {}
-        ) { }
+        LightLockscreen { }
     }
 }
 
@@ -383,11 +275,6 @@ fun LockScreenPreview() {
 @Composable
 fun LockScreenPreviewLight() {
     LightTheme(colors = LightThemeColors.Light) {
-        LightLockscreen(
-            metadata = null,
-            isPlaying = false,
-            onToggle = {},
-            onStop = {}
-        ) { }
+        LightLockscreen { }
     }
 }
