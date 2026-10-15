@@ -50,62 +50,42 @@ private object OpenBluetoothSettings : LightServiceMethod.CustomServiceMethod<Un
     override val responseSerializer = serializer<Unit>()
 }
 
-/**
- * Data model for a radio station.
- * Marked as @Serializable to allow easy saving/loading to JSON files.
- */
 @Serializable
 data class Station(val name: String, val url: String)
 
-/**
- * The core logic for the Radio tool.
- * Handles audio playback via Media3, persistence of station data, and screen navigation.
- */
 class RadioViewModel(
     filesDir: File,
     private val sealedActivity: SealedLightActivity
 ) : LightViewModel<Unit>() {
-    // SDK provided audio player wrapper
     private val audio = DefaultLightAudio(sealedActivity)
     private val player: LightAudioPlayer = audio.newPlayer(playback = LightAudioPlayback.Detached)
     
-    // File paths for local persistence
     private val stationsFile = File(filesDir, "stations.json")
     private val recentPlayedFile = File(filesDir, "recent_played.json")
     private val lastPlayedFile = File(filesDir, "last_played.json")
 
     private var currentScreen: SimpleLightScreen<Unit>? = null
     
-    // Observable state for the UI
     val streamUrl = MutableStateFlow("https://stream.radiokps.nz/")
     val stationName = MutableStateFlow("Radio")
     val stations = MutableStateFlow<List<Station>>(emptyList())
     val recentStations = MutableStateFlow<List<Station>>(emptyList())
     
-    // Playback state forwarded from the SDK player
     val isPlaying = player.isPlaying
     val availability = player.availability
     val error = player.error
     val isFavourite = MutableStateFlow(false)
     
-    // Tracks a station that has been selected but hasn't started playing yet
     private var pendingRecentStation: Station? = null
 
     init {
-        // Initial setup: load saved data and find what we were playing last
         loadStations()
         loadRecentStations()
         loadLastPlayed()
         updateFavouriteState()
-        
-        // Start watching the player state for "Proof of Play"
         observePlaybackForHistory()
     }
 
-    /** 
-     * Watches the player's "isPlaying" state. 
-     * Once a station actually starts playing, we move it from 'pending' to the official history.
-     */
     private fun observePlaybackForHistory() {
         viewModelScope.launch {
             isPlaying.collect { playing ->
@@ -122,18 +102,15 @@ class RadioViewModel(
 
     override fun onScreenShow(screen: SimpleLightScreen<Unit>) {
         currentScreen = screen
-        // Reload stations and recent list whenever returning to home to stay in sync with Library
         loadStations()
         loadRecentStations()
         updateFavouriteState()
     }
 
-    /** Updates the boolean state used to show a solid or outline star. */
     private fun updateFavouriteState() {
         isFavourite.value = stations.value.any { it.url == streamUrl.value }
     }
 
-    /** Loads the list of user-favorited stations from disk. */
     private fun loadStations() {
         if (stationsFile.exists()) {
             try {
@@ -145,7 +122,6 @@ class RadioViewModel(
         }
     }
 
-    /** Loads the history of played stations from disk. */
     private fun loadRecentStations() {
         if (recentPlayedFile.exists()) {
             try {
@@ -157,7 +133,6 @@ class RadioViewModel(
         }
     }
 
-    /** Loads the station metadata that was active when the app was last closed. */
     private fun loadLastPlayed() {
         if (lastPlayedFile.exists()) {
             try {
@@ -171,7 +146,6 @@ class RadioViewModel(
         }
     }
 
-    /** Saves current favorites to disk. */
     private fun saveStations() {
         try {
             val json = Json.encodeToString(stations.value)
@@ -179,7 +153,6 @@ class RadioViewModel(
         } catch (e: Exception) {}
     }
 
-    /** Saves play history to disk. */
     private fun saveRecentStations() {
         try {
             val json = Json.encodeToString(recentStations.value)
@@ -187,7 +160,6 @@ class RadioViewModel(
         } catch (e: Exception) {}
     }
 
-    /** Saves currently active station metadata to disk. */
     private fun saveLastPlayed() {
         try {
             val station = Station(stationName.value, streamUrl.value)
@@ -196,9 +168,8 @@ class RadioViewModel(
         } catch (e: Exception) {}
     }
 
-    /** Adds a station to the top of the history list, maintaining a max of 15 items. */
     private fun addToRecent(station: Station) {
-        loadRecentStations() // Ensure we have the latest list from disk before modifying
+        loadRecentStations()
         val newList = recentStations.value.toMutableList()
         newList.removeAll { it.url == station.url }
         newList.add(0, station)
@@ -209,7 +180,6 @@ class RadioViewModel(
         saveRecentStations()
     }
 
-    /** Toggles playback of the current station URL. */
     fun togglePlayback() {
         if (isPlaying.value) {
             player.pause()
@@ -221,7 +191,6 @@ class RadioViewModel(
                 metadata = LightMediaMetadata(title = station.name)
             )
             
-            // Mark as pending - will be added to history once 'isPlaying' becomes true
             pendingRecentStation = station
             
             player.setMediaQueue(listOf(item))
@@ -231,9 +200,8 @@ class RadioViewModel(
         }
     }
 
-    /** Adds or removes the current station from the user's curated Favorites list. */
     fun toggleFavourite() {
-        loadStations() // Ensure we have the latest list from disk before modifying
+        loadStations()
         val sanitizedUrl = sanitizeUrl(streamUrl.value)
         val currentStation = Station(stationName.value, sanitizedUrl)
         val newList = stations.value.toMutableList()
@@ -250,7 +218,6 @@ class RadioViewModel(
         updateFavouriteState()
     }
 
-    /** Transitions the player to a new station and starts playback immediately. */
     fun playStation(station: Station) {
         val sanitizedUrl = sanitizeUrl(station.url)
         val sanitizedStation = Station(station.name, sanitizedUrl)
@@ -264,7 +231,6 @@ class RadioViewModel(
             metadata = LightMediaMetadata(title = station.name)
         )
         
-        // Mark as pending - history will only update if connection is successful
         pendingRecentStation = sanitizedStation
         
         player.setMediaQueue(listOf(item))
@@ -274,9 +240,8 @@ class RadioViewModel(
     }
 
     /**
-     * Ensures URLs have a protocol and selectively appends SHOUTcast ';' suffix.
-     * We only add the suffix for raw IP addresses or URLs without a path,
-     * ensuring we don't break modern domain-based streams (like Radio NZ).
+     * Appends SHOUTcast ';' suffix only for raw IPs or URL roots to bypass status pages,
+     * while preserving standard domain paths.
      */
     private fun sanitizeUrl(input: String): String {
         var url = input.trim()
@@ -286,7 +251,6 @@ class RadioViewModel(
             url = "http://$url"
         }
         
-        // If it's already got a semicolon or is an HLS playlist, don't touch it
         if (url.contains(";") || url.lowercase().contains(".m3u8")) {
             return url
         }
@@ -294,13 +258,10 @@ class RadioViewModel(
         val protocolEnd = url.indexOf("://") + 3
         val firstSlash = url.indexOf("/", protocolEnd)
         
-        // 1. No path at all OR just a trailing slash -> force SHOUTcast mode
-        // (e.g. http://server:port or http://domain.com/)
         if (firstSlash == -1 || firstSlash == url.length - 1) {
             return if (url.endsWith("/")) "${url};" else "${url}/;"
         }
 
-        // 2. Has a path, but is it an IP address or known SHOUTcast port?
         val hostPart = url.substring(protocolEnd, firstSlash)
         val isLikelyLegacyServer = hostPart.firstOrNull()?.isDigit() == true || 
                                   hostPart.contains(":8000") || 
@@ -308,16 +269,12 @@ class RadioViewModel(
                                   hostPart.contains(":8002")
         
         if (isLikelyLegacyServer) {
-            // Append ; to the end of the URL to force stream over status page
             return if (url.endsWith("/")) "${url};" else "${url};"
         }
         
-        // 3. Standard domain with a path (e.g. Radio NZ) -> leave as-is
         return url
     }
 
-    /** Navigation handlers for sub-screens */
-    
     fun openSearch() {
         currentScreen?.navigateTo({ SearchScreen(it) }) { selectedStation ->
             selectedStation?.let {
@@ -348,8 +305,6 @@ class RadioViewModel(
         loadStations()
         loadRecentStations()
         
-        // Update in Favourites if present
-        // We use sanitizeUrl for comparison because the list might contain either raw or sanitized URLs
         val favs = stations.value.toMutableList()
         val favIndex = favs.indexOfFirst { sanitizeUrl(it.url) == oldUrl }
         if (favIndex != -1) {
@@ -358,7 +313,6 @@ class RadioViewModel(
             saveStations()
         }
 
-        // Update in Recent if present
         val recents = recentStations.value.toMutableList()
         val recentIndex = recents.indexOfFirst { sanitizeUrl(it.url) == oldUrl }
         if (recentIndex != -1) {
@@ -372,7 +326,6 @@ class RadioViewModel(
 
     fun openBluetooth() {
         viewModelScope.launch {
-            // This relies on the LightOS server implementing this custom bridge method.
             callRemoteServiceMethod(OpenBluetoothSettings, Unit)
         }
     }
@@ -382,16 +335,11 @@ class RadioViewModel(
     }
 
     override fun onCleared() {
-        // Clean up resources when the app is fully closed
         player.release()
         super.onCleared()
     }
 }
 
-/**
- * The main "Now Playing" screen of the Radio tool.
- * Annotated with @InitialScreen so the SDK knows to launch this first.
- */
 @InitialScreen
 class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<Unit, RadioViewModel>(sealedActivity) {
 
@@ -401,7 +349,6 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
 
     @Composable
     override fun Content() {
-        // Collect observable state from the ViewModel
         val name by viewModel.stationName.collectAsState()
         val playing by viewModel.isPlaying.collectAsState()
         val availability by viewModel.availability.collectAsState()
@@ -409,7 +356,6 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
         val isFavourite by viewModel.isFavourite.collectAsState()
         val themeColors by LightThemeController.colors.collectAsState()
 
-        // Derive user-friendly status text
         val statusText = when {
             error != null -> "Error loading stream"
             playing -> "Playing Live Stream..."
@@ -417,7 +363,6 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
             else -> "Stopped"
         }
 
-        // Apply the standard Light Phone theme (follows system-wide Light/Dark mode)
         LightTheme(colors = themeColors) {
             val colors = LightThemeTokens.colors
             Column(
@@ -425,13 +370,11 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
                     .fillMaxSize()
                     .background(colors.background)
             ) {
-                // Top Bar with standard back button and tool title
                 LightTopBar(
                     leftButton = LightBarButton.LightIcon(LightIcons.BACK, onClick = { goBack() }),
                     center = LightTopBarCenter.Text("Radio")
                 )
 
-                // Main "Now Playing" area centered on screen
                 Column(
                     modifier = Modifier
                         .weight(1f)
@@ -440,7 +383,6 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    // Station Title Row with Favourite Star
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -470,14 +412,12 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
                         }
                     }
 
-                    // Playback Status Indicator
                     LightText(
                         text = statusText,
                         variant = LightTextVariant.Detail,
                         modifier = Modifier.padding(bottom = 32.dp)
                     )
 
-                    // Large Center Play/Stop Button
                     Box(
                         modifier = Modifier
                             .lightClickable { viewModel.togglePlayback() }
@@ -490,7 +430,6 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
                     }
                 }
 
-                // Standard LightOS Bottom Navigation Bar (Unified Search)
                 LightBottomBar(
                     items = listOf(
                         LightBarButton.LightIcon(LightIcons.SEARCH, onClick = viewModel::openSearch),
@@ -503,9 +442,6 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
     }
 }
 
-/**
- * Screen for renaming a station using the standard full-screen editor style.
- */
 class RenameScreen(
     private val sealedActivity: SealedLightActivity,
     private val initialName: String
@@ -537,7 +473,4 @@ class RenameScreen(
     }
 }
 
-/**
- * Simple concrete ViewModel for text entry screens.
- */
 class SimpleEntryViewModel<T> : LightViewModel<T>()
