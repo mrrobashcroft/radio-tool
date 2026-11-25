@@ -83,10 +83,10 @@ class SearchInputEditorScreen(
                 title = editorRequest.title,
                 state = textState,
                 keyboardOptionsFlow = keyboardOptionsFlow,
-                onSubmit = { result -> goBack(result.toString()) },
+                onSubmit = { result: CharSequence -> goBack(result.toString()) },
                 onBack = { goBack(null) },
                 modifier = Modifier.background(LightThemeTokens.colors.background),
-                initialCaps = editorRequest.initialCaps,
+                autoCapitalize = editorRequest.initialCaps,
             )
         }
     }

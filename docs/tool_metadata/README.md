@@ -24,7 +24,7 @@ orientation  = "portrait"                      # optional; omit for no orientati
 ## Fields
 
 ### `id` — your tool's unique identifier
-A dotted, lowercase Java package identifier with at least two segments — e.g. `com.example.mytool`. Once a tool is published you can't change this without it being treated as a different tool, so pick something stable. If your tool is going in the Light tool library, this will need to be globally unique! We'll let you know if you're trying to pick one that's already been used.
+A dotted, lowercase Java package identifier with at least two segments — e.g. `com.example.mytool`. Ids in the `lightphone` and `thelightphone` namespaces (e.g. `com.lightphone.*`, `org.thelightphone.*`) are reserved for Light: the dashboard won't register them and the build server rejects them, so use a namespace you own. Once a tool is published you can't change this without it being treated as a different tool, so pick something stable. If your tool is going in the Light tool library, this will need to be globally unique! We'll let you know if you're trying to pick one that's already been used.
 
 ### `label` — the name shown on the device
 1–50 printable characters, no `<`, `>`, or control characters. This is what users see in the Light Phone launcher.
@@ -51,6 +51,15 @@ capabilities = ["detached-audio"]
 ```
 
 `detached-audio` generates the `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_MEDIA_PLAYBACK` permissions, the detached audio service, and the SDK marker checked by `LightAudio.newPlayer`. None of those permissions can be listed under `permissions`. The capability owns them, and the build fails with an error naming the capability to declare instead.
+
+DASH playback uses:
+
+```toml
+[tool]
+capabilities = ["audio-dash"]
+```
+
+`audio-dash` adds the media3 DASH source to your tool's dependencies, at the media3 version the SDK is built against. It is a capability rather than a dependency you declare because every tool would otherwise carry a format almost none of them play.
 
 A tool that syncs with a server on the user's own network uses:
 

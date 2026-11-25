@@ -70,6 +70,7 @@ Every screen gets:
 - `dataStore: DataStore<Preferences>` — a shared Preferences DataStore (named `DEFAULT_DATASTORE`) for the whole tool.
 - `filesDir: File` — the standard app private files directory.
 - `fileShare: LightFileShare` — files written here can be read by LightOS via a content provider (e.g., ringtones, wallpapers).
+- `textEntry: LightTextEntry` — low-level access to the keyboard app; most tools want `editText` instead (see [Text entry](#text-entry)).
 
 ### Audio
 
@@ -112,7 +113,7 @@ class PlayerScreen(private val sealedActivity: SealedLightActivity) : LightScree
 
 #### Player
 
-`LightAudioPlayer` plays files, bundled assets, and local or remote URLs. A player owns one queue and exposes its state through `StateFlow` objects: `positionMs`, `durationMs`, `isPlaying`, `currentMediaItemIndex`, `error`, and `availability`.
+`LightAudioPlayer` plays files, bundled assets, and local or remote URLs. A player owns one queue and exposes its state through `StateFlow` objects: `positionMs`, `durationMs`, `isPlaying`, `currentMediaItemIndex`, `queue`, `error`, and `availability`.
 `currentMediaItemIndex` is `NO_MEDIA_ITEM` while the queue is empty.
 
 ```kotlin
@@ -127,14 +128,60 @@ player.setMediaQueue(
 player.play()
 ```
 
-- Use `pause`, `stop`, and `seekTo` for transport controls.
-- `skipBack()` and `skipForward()` seek 15 seconds within the current item; `skipToPrevious()` and `skipToNext()` move through the queue.
+- Use `pause` and `stop` for transport; `seekTo` jumps within an item, `seekToDefaultPosition(index)` selects a queue item, and `skipToPrevious()` or `skipToNext()` selects an adjacent item.
+- Edit the queue in place with `addMediaItem`, `removeMediaItem`, `moveMediaItem`, and `replaceMediaItem`. `queue.value` exposes item IDs and metadata; `queue.value.size` reports its length.
 - Set `speed` to change playback rate; values at or below zero clamp to the minimum supported rate.
 - Use `setSource(File)` as a convenience for a one-item local-file queue.
 - Playback requests audio focus automatically.
 - If focus is unavailable, `play()` does nothing.
 - Observe `isPlaying` for the actual state.
 - Transient focus loss pauses and later resumes playback, while duckable loss lowers the volume.
+
+##### Editing the queue
+
+A negative index is a mistake and throws. An index past the end is not: a queue can change underneath a tool, so `addMediaItem` appends, `moveMediaItem` clamps its destination to the end, and everything else does nothing.
+
+`replaceMediaItem` replaces an item's source, which is how to hand the player a re-resolved URL. Replacing the current item can restart it from the beginning; save its position and seek afterward if you need to resume there. Give both items the same `LightAudioItem.id` so they name the same audio:
+
+```kotlin
+val track = LightAudioItem(
+    id = "track-1",
+    source = LightAudioSource.UrlSource(freshUrl),
+    metadata = LightMediaMetadata(title = "Example"),
+)
+player.replaceMediaItem(index, track)
+```
+
+An item without an `id` is identified and cached by its location. Rotating signed URLs need a stable explicit ID to reuse cached bytes. IDs must be globally unique for distinct audio, including across playlists.
+
+##### Caching what you stream
+
+A player can read through a cache the tool describes. The SDK opens the store under your tool's private cache storage, shares one per directory across your process, and keeps it when the player is released:
+
+```kotlin
+val player = audio.newPlayer(LightPlayerSpec(
+    cache = LightMediaCache("stream", sizeBytes = 256L * 1024 * 1024),
+))
+```
+
+The cache is consulted before the network, and newly streamed bytes are written to it. When it is full, the bytes read longest ago are discarded.
+
+Cached bytes are filed under `LightAudioItem.id`, so an item whose URL is re-resolved still finds what it already cached. Files and bundled assets bypass caching, since they are already on the device. DASH segments are filed under their own URLs, so re-resolved DASH URLs do not reuse what the old ones cached.
+
+A detached session's cache is fixed when its player is built. Reconnecting with a different cache throws `LightAudioPlayerException`, the same way a conflicting `LightAudioUsage` does.
+Reusing a cache name with a different `sizeBytes` in the same process throws
+`IllegalArgumentException` when creating a player, regardless of playback mode.
+
+##### Streaming DASH
+
+media3 plays DASH only when a source for it is on the classpath, which the SDK does not ship to every tool. Ask for it in `lighttool.toml`:
+
+```toml
+[tool]
+capabilities = ["audio-dash"]
+```
+
+Nothing else changes: pass the manifest URL as a `LightAudioSource.UrlSource` and the player selects the DASH source itself.
 
 ##### Playback failures
 
@@ -161,7 +208,7 @@ player.error.collect { error ->
 
 When an item fails, playback stops rather than skipping to the next item.
 The SDK does not advance automatically, because unplayable content would advance in a loop.
-Setting a queue again or selecting a healthy item clears `error`.
+Setting a queue again or replacing a failed item and calling `play()` clears `error` through re-preparation. Queue edits alone do not start playback.
 
 ##### Detached playback and reconnecting
 
@@ -176,7 +223,7 @@ capabilities = ["detached-audio"]
 Wait for its controller before deciding whether the session is fresh:
 
 ```kotlin
-val player = audio.newPlayer(playback = LightAudioPlayback.Detached)
+val player = audio.newPlayer(LightPlayerSpec(playback = LightAudioPlayback.Detached))
 if (player.awaitReady() && player.currentMediaItemIndex.value == NO_MEDIA_ITEM) {
     player.setMediaQueue(items)
 }
@@ -186,11 +233,12 @@ The player `availability` field exposes the connection lifecycle:
 
 - `Initializing` — the detached controller is connecting.
 - `Ready` — commands can be handled. Attached players start here.
+- `Refused` — the detached controller connection was rejected or failed.
 - `Released` — the handle is closed and cannot accept commands.
 
-`awaitReady()` suspends through initialization and returns `true` only when the player reaches `Ready`. Returns `false` if the player is released first.
+`awaitReady()` suspends through initialization and returns `true` only when the player reaches `Ready`. It returns `false` if the connection is refused or the player is released first.
 
-A non-empty queue belongs to the surviving service. Reuse it instead of setting the queue again, which would replace live playback. Position, duration, playing state, queue index, and playback error are populated when the controller connects.
+A non-empty queue belongs to the surviving service. Reuse it instead of setting the queue again, which would replace live playback. Position, duration, playing state, queue, queue index, and playback error are populated when the controller connects.
 Once the service stops, the next player is fresh and restoring its queue and position is the tool's responsibility.
 
 `release()` disconnects a detached handle but does not stop its playback.
@@ -396,6 +444,197 @@ lightConnectivity.observeNetworkStatus().collect {
     // it.isConnected
 }
 ```
+
+### Notifications
+
+`lightContext.notifications` posts and cancels a notification for the tool, and schedules alerts that bring the tool forward at a set time.
+
+Declare `POST_NOTIFICATIONS` in `lighttool.toml` and request it at runtime before posting (`checkPermission` / `rememberPermissionRequestLauncher`):
+
+```toml
+permissions = ["android.permission.POST_NOTIFICATIONS"]
+```
+
+```kotlin
+lightContext.notifications.post("Example", "Posted from light-sdk tool")
+lightContext.notifications.cancel()
+```
+
+Calling `post` again replaces the tool's previous notification, and `cancel` clears it.
+
+`schedule` brings the tool forward when `triggerAtMillis` arrives, even if the tool is not open. This needs a LightOS version that supports tool alerts; on older versions the alert's notification is posted but the tool isn't opened. `cancel(id)` drops the alert, and dismisses it if it's already showing. Scheduling the same id again replaces the previous alert.
+
+Enable alerts in `lighttool.toml`:
+
+```toml
+[tool]
+capabilities = ["alerts"]
+```
+
+The capability generates the `USE_EXACT_ALARM`, `POST_NOTIFICATIONS` and `RECEIVE_BOOT_COMPLETED` permissions and the SDK's alert receiver, so you don't need to list them. `schedule` throws if the capability is missing.
+
+```kotlin
+lightContext.notifications.schedule(
+    id = "dose-1",
+    triggerAtMillis = System.currentTimeMillis() + 60_000,
+    title = "Dose 1",
+    text = "scheduled dose",
+)
+lightContext.notifications.cancel("dose-1")
+```
+
+`scheduledAlertIds` is a `StateFlow` of the ids that are still scheduled, e.g. to show whether an alert is pending.
+
+When the alert arrives, the SDK posts a notification with the alert's title and text and calls your entry point's `onAlert`. LightOS sees the notification and opens the tool, which turns the screen on if it was off. The screen then times out as usual, but LightOS brings the tool back each time the screen turns off, so the alert is what the user sees when they next turn it on. This continues until you call `alert.dismiss()`. Opening the tool happens separately from `onAlert`, so `onAlert` may run before the tool's screen is showing:
+
+```kotlin
+@EntryPoint
+object MyToolEntryPoint : LightEntryPoint {
+    override suspend fun onAlert(alert: LightAlert): Boolean {
+        // show the alert in the tool's UI, and call alert.dismiss() when the user closes it
+        return false // keep it until the user dismisses it
+    }
+}
+```
+
+Return `true` to drop the alert once `onAlert` returns, which is what happens if you don't override it. Return `false` to keep it; a reboot then delivers it again until you call `cancel(alert.id)`. Scheduling the same id again from `onAlert` (e.g. a repeating alert) is kept either way.
+
+Request `POST_NOTIFICATIONS` at runtime before you schedule alerts; without it the alert can't bring the tool forward. `USE_EXACT_ALARM` is granted at install. Use `canPostNotifications` and `canScheduleExactAlerts` to check what has been granted.
+
+When the user is done with the alert, call `alert.dismiss()` to clear its notification, so LightOS stops bringing the tool back. If you never call it, the tool keeps coming back every time the screen turns off. If you no longer have the `LightAlert` (e.g. the tool's process was restarted), `cancel(alert.id)` dismisses it too, and also stops it from being delivered again.
+
+### Images and video
+
+`lightContext.media` is a `LightMedia` instance that allows tools to access media.
+
+Declare the permissions you need in `lighttool.toml` and request each one at runtime before loading (`checkPermission` / `rememberPermissionRequestLauncher`):
+
+```toml
+permissions = [
+  "android.permission.READ_MEDIA_IMAGES",
+  "android.permission.READ_MEDIA_VIDEO",
+]
+```
+
+```kotlin
+val images = lightContext.media.loadImages()
+val videos = lightContext.media.loadVideos()
+
+val bitmap = lightContext.media.decodeImage(imageItem)
+if (bitmap != null) {
+    Image(
+        bitmap = bitmap,
+        contentDescription = imageItem.name,
+        modifier = Modifier.fillMaxWidth().height(8f.gridUnitsAsDp()),
+        contentScale = ContentScale.Crop,
+    )
+}
+
+lightContext.media.Video(
+    item = videoItem,
+    modifier = Modifier.fillMaxWidth().height(8f.gridUnitsAsDp()),
+    scale = ContentScale.Crop,
+)
+
+val bytes = lightContext.media.readItem(imageItem) { input ->
+    input.readBytes()
+}
+```
+
+`loadImages` returns `Item.Image` values and `loadVideos` returns `Item.Video` values. `decodeImage` accepts an image, `Video` accepts a video, and `readItem` accepts either.
+`decodeImage` returns the pixels for an image item, which allows you to render them with `Image` and `ContentScale`.
+`Video` plays a video inside the `modifier` frame.
+`readItem` opens an image or a video as an `InputStream` so a tool can upload it or process the bytes. The stream is only valid inside the block, and a file that has been removed returns null.
+
+### Contacts
+
+`lightContext.contacts` is a `LightContacts` instance that allows tools to list and read contacts.
+
+Declare `READ_CONTACTS` in `lighttool.toml` and request it at runtime before loading (`checkPermission` / `rememberPermissionRequestLauncher`):
+
+```toml
+permissions = ["android.permission.READ_CONTACTS"]
+```
+
+Both `load()` and `loadDetails()` are `suspend` functions that run on `Dispatchers.IO`, so call them from a coroutine (e.g. `LaunchedEffect` or a view model scope). `load()` returns at most 100 contacts by default; pass a `limit` to change that (a negative value returns all of them), and check `directory.truncated` to see whether more exist.
+
+```kotlin
+// inside a coroutine
+val directory = lightContext.contacts.load()
+directory.contacts.forEach { contact ->
+    // contact.id, contact.name
+}
+
+val details = lightContext.contacts.loadDetails(contact.id)
+// details?.phones, emails, addresses, websites, events, organization, note
+```
+
+### Text entry
+
+Use `editText` for text entry. Call it from any screen, ideally right from the tap that starts the edit:
+
+```kotlin
+LightTextField(
+    label = "Name:",
+    value = name,
+    placeholder = "Your name",
+    onClick = {
+        editText(title = "Name", text = name) { result ->
+            if (result is LightTextEditResult.Submitted) viewModel.setName(result.text)
+        }
+    },
+)
+```
+
+It opens the keyboard app full screen when there is one, and otherwise shows `LightTextInputEditor` with the embedded keyboard on a screen of its own, so your tool doesn't need to handle either case. `onResult` gets one of:
+
+- `LightTextEditResult.Submitted(text)`: the user hit submit.
+- `LightTextEditResult.BottomBarItem(text, item)`: the user hit one of the `leftBottomBarItem` / `rightBottomBarItem` you passed (their `onClick` isn't called).
+- `LightTextEditResult.Cancelled`: the user went back.
+
+The options mirror `LightTextInputEditor`'s: `singleLine`, `autoCapitalize` (sentence caps, on by default), `password` (single line, shown as dots, never capitalized), `submitLabel` or `submitIcon`, the two bottom bar items, and `showBackButton`. `onResult` runs on the main thread even if your screen left composition while the editor was open. Coming back from the editor shows your screen again, so `willShow` / `onScreenShow` fire as usual.
+
+`LightTextField` is the read-only field that pairs with it: it shows the current value and opens the editor when tapped.
+
+`LightTextInputEditor` is the composable behind `editText`. Only use it directly if the editor has to live inside your own screen's layout; `editText` keeps you from having to manage its state and keyboard yourself.
+
+#### Lower level: `LightTextEntry`
+
+`editText` is built on `textEntry: LightTextEntry`, which talks to the keyboard app directly (the server decides which app that is). Reach for it only when `editText` can't do what you need, e.g. editing large text as a file. Unlike `editText`, it doesn't fall back to the embedded keyboard: it throws `ActivityNotFoundException` when there's no keyboard app.
+
+Text is shared through files rather than intents, so it works for long text too.
+
+```kotlin
+// small text, with the default screen: back (cancel) at the top left, a check at the top right
+val name = lightContext.textEntry.enterText(initialText = currentName)?.text ?: return // null if the user cancelled
+
+// your own title, layout and actions
+val request = TextEntryRequest(
+    title = "Search",
+    mode = TextEntryMode.Simple, // one line; Multi scrolls and lets return insert newlines
+    actions = listOf(
+        TextEntryAction(TextEntryProtocol.ACTION_ID_CANCEL, TextEntryPosition.TopLeft, TextEntryAction.Content.Icon(TextEntryIcon.Back)),
+        TextEntryAction("search", TextEntryPosition.BottomCenter, TextEntryAction.Content.Text("SEARCH")),
+        TextEntryAction("here", TextEntryPosition.BottomRight, TextEntryAction.Content.CustomIcon(myIconUri)),
+    ),
+    returnActionId = "search", // what the return key does in Simple mode
+)
+val result = lightContext.textEntry.enterText(query, request) ?: return
+when (result.actionId) {
+    "search" -> search(result.text)
+    "here" -> searchNearby(result.text)
+}
+
+// large text: the keyboard reads `draft` and you get the result back as a file
+val edited = lightContext.textEntry.editFile(source = draft) ?: return
+edited.file.renameTo(draft) // you own the returned file
+```
+
+Each action sits in one of five positions (`TopLeft`, `TopRight`, `BottomLeft`, `BottomCenter`, `BottomRight`) and shows a built-in icon, a custom icon or text. A custom icon is an `android.resource://` URI (e.g. one of your drawables) or a `content://` image URI, which is granted to the keyboard for the length of the entry. An action with the id `TextEntryProtocol.ACTION_ID_CANCEL` cancels instead of returning.
+
+These are suspend functions that return once the user hits an action or cancels. Only one entry is open at a time per tool; starting another cancels the previous one (it returns `null`).
+
+The keyboard only gets access to the two files (and any `content://` icons) of the open entry, and loses it as soon as the entry ends.
 
 ### Location
 

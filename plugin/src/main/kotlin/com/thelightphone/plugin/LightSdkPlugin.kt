@@ -18,7 +18,7 @@ class LightSdkPlugin : Plugin<Project> {
         val ALLOWED_DEPENDENCIES: Set<String> = readResourceLines("allowed-dependencies.txt").toSet()
         val SDK_VERSION: String = readResourceLines("sdk-version.txt").single()
 
-        private fun readResourceLines(name: String): List<String> {
+        internal fun readResourceLines(name: String): List<String> {
             val stream = LightSdkPlugin::class.java.getResourceAsStream(name)
                 ?: error("Light SDK plugin resource missing: $name")
             return stream.bufferedReader().useLines { lines ->
@@ -302,6 +302,19 @@ class LightSdkPlugin : Plugin<Project> {
         } catch (e: LightToolMetadataException) {
             throw GradleException("Light SDK: ${e.message}")
         }
+
+        // A warning, not an error: the bundled examples and Light's core tools use these namespaces.
+        if (LightToolPolicy.isReservedToolId(metadata.toolId)) {
+            project.logger.warn(
+                "Light SDK: tool.id '${metadata.toolId}' is in a namespace reserved for Light " +
+                        "(${LightToolPolicy.RESERVED_TOOL_ID_NAMESPACES.joinToString { "*.$it.*" }}). " +
+                        "Change it in lighttool.toml (e.g. com.example.mytool) before registering your tool."
+            )
+        }
+
+        metadata.capabilities
+            .flatMap { LightToolPolicy.CAPABILITY_IMPLIED_DEPENDENCIES[it].orEmpty() }
+            .forEach { project.dependencies.add("implementation", it) }
 
         // Generated manifest path. Anchored under build/ so a clean rebuild
         // always regenerates from current metadata.
