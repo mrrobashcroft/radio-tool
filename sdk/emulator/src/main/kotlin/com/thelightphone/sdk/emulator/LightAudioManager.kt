@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlin.math.roundToInt
 
 enum class ModalType {
-    RingerVol, CallVol, AlarmVol, MediaVol, Silent, VibrateOnly
+    RingerVol, CallVol, AlarmVol, MediaVol, Silent, VibrateOnly, Brightness
 }
 
 data class AudioModal(val type: ModalType, val value: Float)

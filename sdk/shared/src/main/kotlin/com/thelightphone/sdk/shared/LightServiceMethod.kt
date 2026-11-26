@@ -206,6 +206,12 @@ sealed interface LightServiceMethod<TRequest, TResponse> {
         )
     }
 
+    object OpenBluetoothSettings : LightServiceMethod<Unit, Unit> {
+        override val id = "OpenBluetoothSettings"
+        override val requestSerializer = serializer<Unit>()
+        override val responseSerializer = serializer<Unit>()
+    }
+
     /**
      * Base type for tool-defined methods that are not part of [allMethods].
      * The server routes these through [com.thelightphone.sdk.server.LightSdkServer.customServiceMethodResolver].
@@ -228,4 +234,5 @@ val allMethods: Map<String, LightServiceMethod<*, *>> = listOf(
     LightServiceMethod.RequestLocationUpdates,
     LightServiceMethod.ReleaseLocationUpdates,
     LightServiceMethod.GetKeyboardPackage,
+    LightServiceMethod.OpenBluetoothSettings,
 ).associateBy { it.id }

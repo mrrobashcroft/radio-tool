@@ -184,28 +184,38 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
                 val isIpAddress = isLikelyAddress && name.firstOrNull()?.isDigit() == true
 
                 if (isLikelyAddress) {
-                    var urlToTest = sanitizeUrl(name)
-                    var isValid = validateStreamUrl(urlToTest)
-                    
-                    if (!isValid && !isIpAddress) {
-                        if (urlToTest.endsWith(";")) {
-                            val cleanUrl = urlToTest.removeSuffix(";").removeSuffix("/")
-                            if (validateStreamUrl(cleanUrl)) {
-                                urlToTest = cleanUrl
-                                isValid = true
-                            }
-                        }
-                        if (!isValid && urlToTest.startsWith("http://")) {
-                            val secureUrl = urlToTest.replace("http://", "https://")
-                            if (validateStreamUrl(secureUrl)) {
-                                urlToTest = secureUrl
-                                isValid = true
-                            }
+                    val hostWithoutProtocol = name
+                        .removePrefix("http://")
+                        .removePrefix("https://")
+                        .removeSuffix("/")
+                        .removeSuffix(";")
+
+                    val candidates = mutableListOf<String>()
+                    candidates.add("https://$hostWithoutProtocol/;")
+                    candidates.add("https://$hostWithoutProtocol;")
+                    candidates.add("https://$hostWithoutProtocol")
+                    candidates.add("http://$hostWithoutProtocol/;")
+                    candidates.add("http://$hostWithoutProtocol;")
+                    candidates.add("http://$hostWithoutProtocol")
+
+                    val sanitizedHttp = sanitizeUrl(name)
+                    candidates.add(sanitizedHttp)
+                    candidates.add(sanitizedHttp.replace("http://", "https://"))
+                    if (!sanitizedHttp.endsWith(";")) {
+                        candidates.add(if (sanitizedHttp.endsWith("/")) "${sanitizedHttp};" else "${sanitizedHttp}/;")
+                        candidates.add(if (sanitizedHttp.endsWith("/")) "${sanitizedHttp.replace("http://", "https://")};" else "${sanitizedHttp.replace("http://", "https://")}/;")
+                    }
+
+                    var foundUrl: String? = null
+                    for (candidate in candidates.distinct()) {
+                        if (validateStreamUrl(candidate)) {
+                            foundUrl = candidate
+                            break
                         }
                     }
 
-                    if (isValid) {
-                        directUrlResult.value = Station(name = "Untitled", url = urlToTest)
+                    if (foundUrl != null) {
+                        directUrlResult.value = Station(name = "Untitled", url = foundUrl)
                         return@launch
                     } else if (isIpAddress) {
                         directUrlError.value = "No results found"
@@ -280,19 +290,35 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
     private fun sanitizeUrl(input: String): String {
         var url = input.trim()
         if (url.isBlank()) return url
-        if (!url.startsWith("http://") && !url.startsWith("https://")) url = "http://$url"
-        if (url.contains(";") || url.lowercase().contains(".m3u8")) return url
+        
+        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+            url = "http://$url"
+        }
+        
+        if (url.contains(";") || url.lowercase().contains(".m3u8")) {
+            return url
+        }
+
         val protocolEnd = url.indexOf("://") + 3
         val firstSlash = url.indexOf("/", protocolEnd)
+        
         if (firstSlash == -1 || firstSlash == url.length - 1) {
-            val hostPart = if (firstSlash == -1) url.substring(protocolEnd) else url.substring(protocolEnd, firstSlash)
-            val isLegacy = hostPart.firstOrNull()?.isDigit() == true || hostPart.contains(":")
-            if (isLegacy) return if (url.endsWith("/")) "${url};" else "${url}/;"
+            return if (url.endsWith("/")) "${url};" else "${url}/;"
         }
-        val hostPartEnd = if (firstSlash == -1) url.length else firstSlash
-        val hostPart = url.substring(protocolEnd, hostPartEnd)
-        val isLegacyPort = hostPart.contains(":8000") || hostPart.contains(":18442") || hostPart.contains(":8002") || hostPart.contains(":8005") || hostPart.contains(":7000")
-        if (isLegacyPort) return "${url};"
+
+        val hostPart = url.substring(protocolEnd, firstSlash)
+        val isLikelyLegacyServer = hostPart.firstOrNull()?.isDigit() == true || 
+                                  hostPart.contains(":8000") || 
+                                  hostPart.contains(":18442") ||
+                                  hostPart.contains(":8002") ||
+                                  hostPart.contains(":8005") ||
+                                  hostPart.contains(":7000") ||
+                                  hostPart.contains(":")
+        
+        if (isLikelyLegacyServer) {
+            return if (url.endsWith("/")) "${url};" else "${url};"
+        }
+        
         return url
     }
 

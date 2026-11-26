@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.os.Environment
+import android.provider.Settings
 import android.util.Log
 import androidx.work.Configuration
 import com.thelightphone.backup.BackupScheduler
@@ -58,7 +59,7 @@ class EmulatorApplication : Application(), Configuration.Provider {
     }
 
     val lightAudioManager by lazy { LightAudioManager(this) }
-    val deviceKeyHandler by lazy { EmulatorDeviceKeyHandler(lightAudioManager) }
+    val deviceKeyHandler by lazy { EmulatorDeviceKeyHandler(this, lightAudioManager) }
 
     val backupSharedPrefs: SharedPreferences by lazy {
         getSharedPreferences(
@@ -139,6 +140,16 @@ class EmulatorApplication : Application(), Configuration.Provider {
             permissionActivity = LightSdkPermissionActivity::class.java
             onDeviceKeyEvent = { _, request -> handleDeviceKeyEvent(request) }
             getKeyboardPackage = ::installedLp3Keyboard
+            onOpenBluetoothSettings = { _ ->
+                val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                try {
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    Log.e("LightEmulator", "Failed to open bluetooth settings", e)
+                }
+            }
             // emulator is running on local device, automatically approve network
             isNetworkApprovedForToolManager = { true }
             foregroundToolManagerUi = { activity, path ->

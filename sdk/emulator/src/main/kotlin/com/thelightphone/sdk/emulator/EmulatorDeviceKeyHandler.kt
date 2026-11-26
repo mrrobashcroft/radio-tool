@@ -1,5 +1,9 @@
 package com.thelightphone.sdk.emulator
 
+import android.content.Context
+import android.content.Intent
+import android.provider.MediaStore
+import android.provider.Settings
 import android.util.Log
 import android.view.KeyEvent.ACTION_DOWN
 import androidx.compose.foundation.layout.Column
@@ -31,7 +35,11 @@ import com.thelightphone.sdk.ui.gridUnitsAsDp
 import com.thelightphone.sdk.ui.lightClickable
 import kotlinx.coroutines.CompletableDeferred
 
-class EmulatorDeviceKeyHandler(private val audioManager: LightAudioManager) {
+class EmulatorDeviceKeyHandler(
+    private val context: Context,
+    private val audioManager: LightAudioManager
+) {
+    private val brightnessManager = EmulatorBrightnessManager(context)
 
     companion object {
         private const val TAG = "EmulatorDeviceKeyHandler"
@@ -42,10 +50,73 @@ class EmulatorDeviceKeyHandler(private val audioManager: LightAudioManager) {
         return when (LightDeviceKeys.mapping[request.keyCode]) {
             LightDeviceKeys.VolumeUp -> audioManager.stepUp()
             LightDeviceKeys.VolumeDown -> audioManager.stepDown()
+            LightDeviceKeys.RotaryTurnUp -> brightnessManager.stepUp()
+            LightDeviceKeys.RotaryTurnDown -> brightnessManager.stepDown()
+            LightDeviceKeys.ShutterPressed -> {
+                launchCameraApp()
+                null
+            }
             else -> {
                 Log.d(TAG, "Unhandled keyCode: ${request.keyCode}")
                 null
             }
+        }
+    }
+
+    private fun launchCameraApp() {
+        try {
+            val intent = context.packageManager.getLaunchIntentForPackage("com.thelightphone.camera")
+                ?: Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to launch camera app", e)
+        }
+    }
+}
+
+class EmulatorBrightnessManager(private val context: Context) {
+    private val contentResolver = context.contentResolver
+
+    fun stepUp(): AudioModal {
+        val current = try {
+            Settings.System.getInt(
+                contentResolver,
+                Settings.System.SCREEN_BRIGHTNESS,
+                128
+            )
+        } catch (e: Exception) {
+            128
+        }
+        val next = (current + 25).coerceAtMost(255)
+        setBrightness(next)
+        return AudioModal(ModalType.Brightness, next.toFloat() / 255f)
+    }
+
+    fun stepDown(): AudioModal {
+        val current = try {
+            Settings.System.getInt(
+                contentResolver,
+                Settings.System.SCREEN_BRIGHTNESS,
+                128
+            )
+        } catch (e: Exception) {
+            128
+        }
+        val next = (current - 25).coerceAtLeast(10)
+        setBrightness(next)
+        return AudioModal(ModalType.Brightness, next.toFloat() / 255f)
+    }
+
+    private fun setBrightness(value: Int) {
+        try {
+            Settings.System.putInt(
+                contentResolver,
+                Settings.System.SCREEN_BRIGHTNESS,
+                value
+            )
+        } catch (e: Exception) {
+            Log.w("EmulatorBrightnessManager", "Failed to set screen brightness", e)
         }
     }
 }
@@ -72,6 +143,7 @@ class DeviceKeyModal(
             ModalType.MediaVol -> "volume"
             ModalType.Silent -> "silent"
             ModalType.VibrateOnly -> "vibrate only"
+            ModalType.Brightness -> "brightness"
         }
         LightTheme(themeColors) {
             Surface {

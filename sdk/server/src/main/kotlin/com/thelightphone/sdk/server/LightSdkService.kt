@@ -288,6 +288,11 @@ class LightSdkService : Service() {
                 )
             }
 
+            LightServiceMethod.OpenBluetoothSettings -> {
+                LightSdkServer.onOpenBluetoothSettings(callingUid)
+                LightResult.Success(LightServiceMethod.OpenBluetoothSettings.encodeResponse(Unit))
+            }
+
             null, is LightServiceMethod.CustomServiceMethod<*, *> -> {
                 // The app that wraps this server may be able to handle custom methods
                 LightSdkServer.customServiceMethodResolver.invoke(callingUid, methodId, payload)

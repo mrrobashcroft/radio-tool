@@ -272,6 +272,16 @@ object LightSdkServer {
         }
 
     /**
+     * Open Bluetooth settings
+     *
+     * Settable from enclosing application!! May be run on any thread
+     */
+    var onOpenBluetoothSettings: (callingUid: Int) -> Unit =
+        { _ ->
+            Log.e(TAG, "OpenBluetoothSettings not configured by server")
+        }
+
+    /**
      * Whether [LightNotificationListenerService] may bring this tool forward for an alert it
      * posted. Only asked for allowed tools that declare the alerts capability. The enclosing app
      * can override this for do-not-disturb, per-tool mutes or rate limits.
