@@ -28,6 +28,7 @@ import com.thelightphone.sdk.audio.DefaultLightAudio
 import com.thelightphone.sdk.audio.LightAudioItem
 import com.thelightphone.sdk.audio.LightAudioPlayback
 import com.thelightphone.sdk.audio.LightAudioPlayer
+import com.thelightphone.sdk.audio.LightPlayerSpec
 import com.thelightphone.sdk.audio.LightAudioPlayerAvailability
 import com.thelightphone.sdk.audio.LightAudioSource
 import com.thelightphone.sdk.audio.LightMediaMetadata
@@ -67,7 +68,7 @@ class RadioViewModel(
 ) : LightViewModel<Unit>() {
     // SDK provided audio player wrapper
     private val audio = DefaultLightAudio(sealedActivity)
-    private val player: LightAudioPlayer = audio.newPlayer(playback = LightAudioPlayback.Detached)
+    private val player: LightAudioPlayer = audio.newPlayer(LightPlayerSpec(playback = LightAudioPlayback.Detached))
     
     // File paths for local persistence
     private val stationsFile = File(filesDir, "stations.json")
