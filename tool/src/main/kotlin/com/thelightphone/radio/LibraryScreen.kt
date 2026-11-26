@@ -38,21 +38,14 @@ import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.Json
 
-/**
- * Defines the tabs available in the Library screen.
- */
 enum class LibraryTab {
     Favourites, Recent
 }
 
-/**
- * logic for managing the local station library.
- */
 class LibraryViewModel(private val filesDir: File) : LightViewModel<Station?>() {
     private val stationsFile = File(filesDir, "stations.json")
     private val recentPlayedFile = File(filesDir, "recent_played.json")
     
-    // Observable lists for the two library sections
     val favourites = MutableStateFlow<List<Station>>(emptyList())
     val recent = MutableStateFlow<List<Station>>(emptyList())
     val activeTab = MutableStateFlow(LibraryTab.Favourites)
@@ -68,7 +61,6 @@ class LibraryViewModel(private val filesDir: File) : LightViewModel<Station?>() 
         currentScreen = screen
     }
 
-    /** Loads saved favorites from the tool's private data directory. */
     private fun loadFavourites() {
         if (stationsFile.exists()) {
             try {
@@ -80,7 +72,6 @@ class LibraryViewModel(private val filesDir: File) : LightViewModel<Station?>() 
         }
     }
 
-    /** Loads play history from the tool's private data directory. */
     private fun loadRecent() {
         if (recentPlayedFile.exists()) {
             try {
@@ -92,7 +83,6 @@ class LibraryViewModel(private val filesDir: File) : LightViewModel<Station?>() 
         }
     }
 
-    /** Persists favourites to disk. */
     private fun saveFavourites() {
         try {
             val json = Json.encodeToString(favourites.value)
@@ -100,7 +90,6 @@ class LibraryViewModel(private val filesDir: File) : LightViewModel<Station?>() 
         } catch (e: Exception) {}
     }
 
-    /** Persists history to disk. */
     private fun saveRecent() {
         try {
             val json = Json.encodeToString(recent.value)
@@ -108,12 +97,10 @@ class LibraryViewModel(private val filesDir: File) : LightViewModel<Station?>() 
         } catch (e: Exception) {}
     }
 
-    /** Returns the selected station metadata to the HomeScreen. */
     fun selectStation(station: Station) {
         currentScreen?.goBack(station)
     }
 
-    /** Removes a station from the Favourites list and saves changes. */
     fun removeFavourite(station: Station) {
         val newList = favourites.value.toMutableList()
         newList.remove(station)
@@ -121,7 +108,6 @@ class LibraryViewModel(private val filesDir: File) : LightViewModel<Station?>() 
         saveFavourites()
     }
 
-    /** Removes a station from the Recent list and saves changes. */
     fun removeRecent(station: Station) {
         val newList = recent.value.toMutableList()
         newList.remove(station)
@@ -129,15 +115,11 @@ class LibraryViewModel(private val filesDir: File) : LightViewModel<Station?>() 
         saveRecent()
     }
 
-    /** Switches the active tab view. */
     fun setActiveTab(tab: LibraryTab) {
         activeTab.value = tab
     }
 }
 
-/**
- * Library screen showing the user's favorite and recently played radio stations.
- */
 class LibraryScreen(private val sealedActivity: SealedLightActivity) : LightScreen<Station?, LibraryViewModel>(sealedActivity) {
     override val viewModelClass = LibraryViewModel::class.java
     override fun createViewModel() = LibraryViewModel(lightContext.filesDir)
@@ -155,20 +137,17 @@ class LibraryScreen(private val sealedActivity: SealedLightActivity) : LightScre
                     .fillMaxSize()
                     .background(colors.background)
             ) {
-                // Header
                 LightTopBar(
                     leftButton = LightBarButton.LightIcon(LightIcons.BACK, onClick = { goBack() }),
                     center = LightTopBarCenter.Text("Library"),
                 )
 
-                // Custom Tab Bar with LP3 styling
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 24.dp, vertical = 16.dp),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    // Favourites Tab
                     Column(
                         modifier = Modifier
                             .weight(1f)
@@ -179,7 +158,6 @@ class LibraryScreen(private val sealedActivity: SealedLightActivity) : LightScre
                             text = "Favourites",
                             variant = LightTextVariant.Subheading,
                         )
-                        // Underline indicator for active tab
                         if (activeTab == LibraryTab.Favourites) {
                             Box(
                                 modifier = Modifier
@@ -191,7 +169,6 @@ class LibraryScreen(private val sealedActivity: SealedLightActivity) : LightScre
                         }
                     }
 
-                    // Recent Tab
                     Column(
                         modifier = Modifier
                             .weight(1f)
@@ -202,7 +179,6 @@ class LibraryScreen(private val sealedActivity: SealedLightActivity) : LightScre
                             text = "Recent",
                             variant = LightTextVariant.Subheading,
                         )
-                        // Underline indicator for active tab
                         if (activeTab == LibraryTab.Recent) {
                             Box(
                                 modifier = Modifier
@@ -215,7 +191,6 @@ class LibraryScreen(private val sealedActivity: SealedLightActivity) : LightScre
                     }
                 }
 
-                // Conditional logic to show the correct list and deletion handler
                 val currentList = if (activeTab == LibraryTab.Favourites) favourites else recent
                 val onDelete: (Station) -> Unit = if (activeTab == LibraryTab.Favourites) {
                     { viewModel.removeFavourite(it) }
@@ -223,7 +198,6 @@ class LibraryScreen(private val sealedActivity: SealedLightActivity) : LightScre
                     { viewModel.removeRecent(it) }
                 }
 
-                // Empty state or Scrollable List
                 if (currentList.isEmpty()) {
                     Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                         LightText(
@@ -248,7 +222,6 @@ class LibraryScreen(private val sealedActivity: SealedLightActivity) : LightScre
         }
     }
 
-    /** Reusable row for displaying a station in a list. */
     @Composable
     private fun StationRow(station: Station, onPlay: () -> Unit, onDelete: () -> Unit) {
         Row(
@@ -266,7 +239,6 @@ class LibraryScreen(private val sealedActivity: SealedLightActivity) : LightScre
                 LightText(text = station.url, variant = LightTextVariant.Fine, maxLines = 1)
             }
             
-            // Delete button
             Box(
                 modifier = Modifier
                     .padding(start = 16.dp)
@@ -291,27 +263,25 @@ private fun PreviewLibraryScreen() {
                 .fillMaxSize()
                 .background(LightThemeColors.Dark.background)
         ) {
-                LightTopBar(
-                    leftButton = LightBarButton.LightIcon(LightIcons.BACK, onClick = {}),
-                    center = LightTopBarCenter.Text("Library"),
-                )
+            LightTopBar(
+                leftButton = LightBarButton.LightIcon(LightIcons.BACK, onClick = {}),
+                center = LightTopBarCenter.Text("Library"),
+            )
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 24.dp, vertical = 16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    // Favourites Tab
-                    Column(
-                        modifier = Modifier
-                            .weight(1f),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        LightText(
-                            text = "Favourites",
-                            variant = LightTextVariant.Subheading,
-                        )
+                    LightText(
+                        text = "Favourites",
+                        variant = LightTextVariant.Subheading,
+                    )
                     Box(
                         modifier = Modifier
                             .padding(top = 4.dp)

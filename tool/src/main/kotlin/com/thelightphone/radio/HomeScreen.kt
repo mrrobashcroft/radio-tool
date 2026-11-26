@@ -1,12 +1,10 @@
 // Initial build design compiled by Rob Ashcroft, August 2026
 package com.thelightphone.radio
 
-import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -33,7 +31,6 @@ import com.thelightphone.sdk.audio.LightAudioPlayer
 import com.thelightphone.sdk.audio.LightAudioPlayerAvailability
 import com.thelightphone.sdk.audio.LightAudioSource
 import com.thelightphone.sdk.audio.LightMediaMetadata
-import com.thelightphone.sdk.audio.LightPlayerSpec
 import com.thelightphone.sdk.callRemoteServiceMethod
 import com.thelightphone.sdk.shared.LightServiceMethod
 import com.thelightphone.sdk.ui.*
@@ -46,6 +43,12 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.serializer
+
+private object OpenBluetoothSettings : LightServiceMethod.CustomServiceMethod<Unit, Unit>() {
+    override val id = "OpenBluetoothSettings"
+    override val requestSerializer = serializer<Unit>()
+    override val responseSerializer = serializer<Unit>()
+}
 
 /**
  * Data model for a radio station.
@@ -64,7 +67,7 @@ class RadioViewModel(
 ) : LightViewModel<Unit>() {
     // SDK provided audio player wrapper
     private val audio = DefaultLightAudio(sealedActivity)
-    private val player: LightAudioPlayer = audio.newPlayer(LightPlayerSpec(playback = LightAudioPlayback.Detached))
+    private val player: LightAudioPlayer = audio.newPlayer(playback = LightAudioPlayback.Detached)
     
     // File paths for local persistence
     private val stationsFile = File(filesDir, "stations.json")
@@ -84,14 +87,6 @@ class RadioViewModel(
     val availability = player.availability
     val error = player.error
     val isFavourite = MutableStateFlow(false)
-
-    enum class RadioPlaybackState {
-        Playing,
-        Paused,
-        Stopped
-    }
-
-    val playbackState = MutableStateFlow<RadioPlaybackState>(RadioPlaybackState.Stopped)
     
     // Tracks a station that has been selected but hasn't started playing yet
     private var pendingRecentStation: Station? = null
@@ -115,15 +110,10 @@ class RadioViewModel(
         viewModelScope.launch {
             isPlaying.collect { playing ->
                 if (playing) {
-                    playbackState.value = RadioPlaybackState.Playing
                     pendingRecentStation?.let { station ->
-                        Log.d("RadioViewModel", "Proof of Play received for: ${station.name}. Adding to history.")
+                        android.util.Log.d("RadioViewModel", "Proof of Play received for: ${station.name}. Adding to history.")
                         addToRecent(station)
                         pendingRecentStation = null
-                    }
-                } else {
-                    if (playbackState.value == RadioPlaybackState.Playing) {
-                        playbackState.value = RadioPlaybackState.Paused
                     }
                 }
             }
@@ -219,29 +209,26 @@ class RadioViewModel(
         saveRecentStations()
     }
 
-    fun play() {
-        val sanitizedUrl = sanitizeUrl(streamUrl.value)
-        val station = Station(stationName.value, sanitizedUrl)
-        val item = LightAudioItem(
-            source = LightAudioSource.UrlSource(station.url),
-            metadata = LightMediaMetadata(title = station.name)
-        )
-        pendingRecentStation = station
-        player.setMediaQueue(listOf(item))
-        player.play()
-        saveLastPlayed()
-        updateFavouriteState()
-        playbackState.value = RadioPlaybackState.Playing
-    }
-
-    fun pause() {
-        player.pause()
-        playbackState.value = RadioPlaybackState.Paused
-    }
-
-    fun stop() {
-        player.stop()
-        playbackState.value = RadioPlaybackState.Stopped
+    /** Toggles playback of the current station URL. */
+    fun togglePlayback() {
+        if (isPlaying.value) {
+            player.pause()
+        } else {
+            val sanitizedUrl = sanitizeUrl(streamUrl.value)
+            val station = Station(stationName.value, sanitizedUrl)
+            val item = LightAudioItem(
+                source = LightAudioSource.UrlSource(station.url),
+                metadata = LightMediaMetadata(title = station.name)
+            )
+            
+            // Mark as pending - will be added to history once 'isPlaying' becomes true
+            pendingRecentStation = station
+            
+            player.setMediaQueue(listOf(item))
+            player.play()
+            saveLastPlayed()
+            updateFavouriteState()
+        }
     }
 
     /** Adds or removes the current station from the user's curated Favorites list. */
@@ -284,7 +271,6 @@ class RadioViewModel(
         player.play()
         saveLastPlayed()
         updateFavouriteState()
-        playbackState.value = RadioPlaybackState.Playing
     }
 
     /**
@@ -386,7 +372,8 @@ class RadioViewModel(
 
     fun openBluetooth() {
         viewModelScope.launch {
-            callRemoteServiceMethod(LightServiceMethod.OpenBluetoothSettings, Unit)
+            // This relies on the LightOS server implementing this custom bridge method.
+            callRemoteServiceMethod(OpenBluetoothSettings, Unit)
         }
     }
 
@@ -416,7 +403,7 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
     override fun Content() {
         // Collect observable state from the ViewModel
         val name by viewModel.stationName.collectAsState()
-        val playbackState by viewModel.playbackState.collectAsState()
+        val playing by viewModel.isPlaying.collectAsState()
         val availability by viewModel.availability.collectAsState()
         val error by viewModel.error.collectAsState()
         val isFavourite by viewModel.isFavourite.collectAsState()
@@ -425,8 +412,7 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
         // Derive user-friendly status text
         val statusText = when {
             error != null -> "Error loading stream"
-            playbackState == RadioViewModel.RadioPlaybackState.Playing -> "Playing Live Stream..."
-            playbackState == RadioViewModel.RadioPlaybackState.Paused -> "Paused"
+            playing -> "Playing Live Stream..."
             availability == LightAudioPlayerAvailability.Initializing -> "Connecting..."
             else -> "Stopped"
         }
@@ -491,50 +477,16 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
                         modifier = Modifier.padding(bottom = 32.dp)
                     )
 
-                    // Playback Controls matching LightOS experience:
-                    // Playing -> Pause button
-                    // Paused / Stopped -> Stop & Play buttons
-                    when (playbackState) {
-                        RadioViewModel.RadioPlaybackState.Playing -> {
-                            Box(
-                                modifier = Modifier
-                                    .lightClickable { viewModel.pause() }
-                                    .padding(16.dp)
-                            ) {
-                                LightIcon(
-                                    icon = LightIcons.PAUSE,
-                                    size = 2.5f
-                                )
-                            }
-                        }
-                        RadioViewModel.RadioPlaybackState.Paused,
-                        RadioViewModel.RadioPlaybackState.Stopped -> {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(32.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .lightClickable { viewModel.stop() }
-                                        .padding(16.dp)
-                                ) {
-                                    LightIcon(
-                                        icon = LightIcons.STOP,
-                                        size = 2.5f
-                                    )
-                                }
-                                Box(
-                                    modifier = Modifier
-                                        .lightClickable { viewModel.play() }
-                                        .padding(16.dp)
-                                ) {
-                                    LightIcon(
-                                        icon = LightIcons.PLAY,
-                                        size = 2.5f
-                                    )
-                                }
-                            }
-                        }
+                    // Large Center Play/Stop Button
+                    Box(
+                        modifier = Modifier
+                            .lightClickable { viewModel.togglePlayback() }
+                            .padding(16.dp)
+                    ) {
+                        com.thelightphone.sdk.ui.LightIcon(
+                            icon = if (playing) LightIcons.STOP else LightIcons.PLAY,
+                            size = 2.5f
+                        )
                     }
                 }
 
