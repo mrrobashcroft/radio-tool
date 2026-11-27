@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -29,10 +30,12 @@ import com.thelightphone.sdk.audio.DefaultLightAudio
 import com.thelightphone.sdk.audio.LightAudioItem
 import com.thelightphone.sdk.audio.LightAudioPlayback
 import com.thelightphone.sdk.audio.LightAudioPlayer
-import com.thelightphone.sdk.audio.LightPlayerSpec
 import com.thelightphone.sdk.audio.LightAudioPlayerAvailability
 import com.thelightphone.sdk.audio.LightAudioSource
+import com.thelightphone.sdk.audio.LightAudioUsage
+import com.thelightphone.sdk.audio.LightMediaCache
 import com.thelightphone.sdk.audio.LightMediaMetadata
+import com.thelightphone.sdk.audio.LightPlayerSpec
 import com.thelightphone.sdk.ui.*
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.lifecycle.viewModelScope
@@ -61,7 +64,13 @@ class RadioViewModel(
 ) : LightViewModel<Unit>() {
     // SDK provided audio player wrapper
     private val audio = DefaultLightAudio(sealedActivity)
-    private val player: LightAudioPlayer = audio.newPlayer(LightPlayerSpec(playback = LightAudioPlayback.Detached))
+    private val player: LightAudioPlayer = audio.newPlayer(
+        LightPlayerSpec(
+            usage = LightAudioUsage.Speech,
+            playback = LightAudioPlayback.Detached,
+            cache = LightMediaCache("radio_cache", sizeBytes = 5L * 1024 * 1024)
+        )
+    )
     
     // File paths for local persistence
     private val stationsFile = File(filesDir, "stations.json")
@@ -277,15 +286,29 @@ class RadioViewModel(
         saveRecentStations()
     }
 
-    /** Toggles playback of the current station URL. */
-    fun togglePlayback() {
-        if (isPlaying.value) {
-            player.pause()
-            playbackState.value = RadioPlaybackState.Paused
-        } else {
-            prepareVariants(streamUrl.value)
-            playCurrentVariant(stationName.value)
-        }
+    fun play() {
+        prepareVariants(streamUrl.value)
+        playCurrentVariant(stationName.value)
+    }
+
+    fun pause() {
+        player.pause()
+        playbackState.value = RadioPlaybackState.Paused
+    }
+
+    fun stopPlayback() {
+        player.stop()
+        playbackState.value = RadioPlaybackState.Stopped
+    }
+
+    fun skipBack15() {
+        val currentPos = player.positionMs.value
+        player.seekTo(maxOf(0L, currentPos - 15_000))
+    }
+
+    fun skipForward15() {
+        val currentPos = player.positionMs.value
+        player.seekTo(currentPos + 15_000)
     }
 
     /** Adds or removes the current station from the user's curated Favorites list. */
@@ -439,7 +462,7 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
     override fun Content() {
         // Collect observable state from the ViewModel
         val name by viewModel.stationName.collectAsState()
-        val playing by viewModel.isPlaying.collectAsState()
+        val state by viewModel.playbackState.collectAsState()
         val availability by viewModel.availability.collectAsState()
         val error by viewModel.error.collectAsState()
         val isFavourite by viewModel.isFavourite.collectAsState()
@@ -448,7 +471,8 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
         // Derive user-friendly status text
         val statusText = when {
             error != null -> "Error loading stream"
-            playing -> "Playing Live Stream..."
+            state == RadioViewModel.RadioPlaybackState.Playing -> "Playing Live Stream..."
+            state == RadioViewModel.RadioPlaybackState.Paused -> "Paused"
             availability == LightAudioPlayerAvailability.Initializing -> "Connecting..."
             else -> "Stopped"
         }
@@ -513,16 +537,99 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
                         modifier = Modifier.padding(bottom = 32.dp)
                     )
 
-                    // Large Center Play/Stop Button
+                    // Media Controls based on state (fixed height container prevents vertical jumping)
                     Box(
                         modifier = Modifier
-                            .lightClickable { viewModel.togglePlayback() }
-                            .padding(16.dp)
+                            .fillMaxWidth()
+                            .height(64.dp),
+                        contentAlignment = Alignment.Center
                     ) {
-                        com.thelightphone.sdk.ui.LightIcon(
-                            icon = if (playing) LightIcons.STOP else LightIcons.PLAY,
-                            size = 2.5f
-                        )
+                        when (state) {
+                            RadioViewModel.RadioPlaybackState.Stopped -> {
+                                Box(
+                                    modifier = Modifier
+                                        .lightClickable { viewModel.play() }
+                                        .padding(12.dp)
+                                ) {
+                                    LightIcon(
+                                        icon = LightIcons.PLAY,
+                                        size = 1.8f
+                                    )
+                                }
+                            }
+                            RadioViewModel.RadioPlaybackState.Playing -> {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceEvenly,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .lightClickable { viewModel.skipBack15() }
+                                            .padding(12.dp)
+                                    ) {
+                                        LightIcon(icon = LightIcons.SKIP_BACKWARD_FIFTEEN, size = 1.8f)
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .lightClickable { viewModel.stopPlayback() }
+                                            .padding(12.dp)
+                                    ) {
+                                        LightIcon(icon = LightIcons.STOP, size = 1.8f)
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .lightClickable { viewModel.pause() }
+                                            .padding(12.dp)
+                                    ) {
+                                        LightIcon(icon = LightIcons.PAUSE, size = 1.8f)
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .lightClickable { viewModel.skipForward15() }
+                                            .padding(12.dp)
+                                    ) {
+                                        LightIcon(icon = LightIcons.SKIP_FORWARD_FIFTEEN, size = 1.8f)
+                                    }
+                                }
+                            }
+                            RadioViewModel.RadioPlaybackState.Paused -> {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceEvenly,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .lightClickable { viewModel.skipBack15() }
+                                            .padding(12.dp)
+                                    ) {
+                                        LightIcon(icon = LightIcons.SKIP_BACKWARD_FIFTEEN, size = 1.8f)
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .lightClickable { viewModel.stopPlayback() }
+                                            .padding(12.dp)
+                                    ) {
+                                        LightIcon(icon = LightIcons.STOP, size = 1.8f)
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .lightClickable { viewModel.play() }
+                                            .padding(12.dp)
+                                    ) {
+                                        LightIcon(icon = LightIcons.PLAY, size = 1.8f)
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .lightClickable { viewModel.skipForward15() }
+                                            .padding(12.dp)
+                                    ) {
+                                        LightIcon(icon = LightIcons.SKIP_FORWARD_FIFTEEN, size = 1.8f)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
