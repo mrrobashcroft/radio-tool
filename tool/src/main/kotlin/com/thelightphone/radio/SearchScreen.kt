@@ -181,33 +181,42 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
                 directUrlError.value = null
 
                 val isLikelyAddress = name.contains(".") && !name.contains(" ")
-                val isIpAddress = isLikelyAddress && name.firstOrNull()?.isDigit() == true
 
                 if (isLikelyAddress) {
-                    var urlToTest = sanitizeUrl(name)
-                    var isValid = validateStreamUrl(urlToTest)
-                    
-                    if (!isValid && !isIpAddress) {
-                        if (urlToTest.endsWith(";")) {
-                            val cleanUrl = urlToTest.removeSuffix(";").removeSuffix("/")
-                            if (validateStreamUrl(cleanUrl)) {
-                                urlToTest = cleanUrl
-                                isValid = true
-                            }
-                        }
-                        if (!isValid && urlToTest.startsWith("http://")) {
-                            val secureUrl = urlToTest.replace("http://", "https://")
-                            if (validateStreamUrl(secureUrl)) {
-                                urlToTest = secureUrl
-                                isValid = true
-                            }
+                    val hostWithoutProtocol = name
+                        .removePrefix("http://")
+                        .removePrefix("https://")
+                        .removeSuffix("/")
+                        .removeSuffix(";")
+
+                    val candidates = mutableListOf<String>()
+                    candidates.add("https://$hostWithoutProtocol/;")
+                    candidates.add("https://$hostWithoutProtocol;")
+                    candidates.add("https://$hostWithoutProtocol")
+                    candidates.add("http://$hostWithoutProtocol/;")
+                    candidates.add("http://$hostWithoutProtocol;")
+                    candidates.add("http://$hostWithoutProtocol")
+
+                    val sanitizedHttp = sanitizeUrl(name)
+                    candidates.add(sanitizedHttp)
+                    candidates.add(sanitizedHttp.replace("http://", "https://"))
+                    if (!sanitizedHttp.endsWith(";")) {
+                        candidates.add(if (sanitizedHttp.endsWith("/")) "${sanitizedHttp};" else "${sanitizedHttp}/;")
+                        candidates.add(if (sanitizedHttp.endsWith("/")) "${sanitizedHttp.replace("http://", "https://")};" else "${sanitizedHttp.replace("http://", "https://")}/;")
+                    }
+
+                    var validUrl: String? = null
+                    for (candidate in candidates.distinct()) {
+                        if (validateStreamUrl(candidate)) {
+                            validUrl = candidate
+                            break
                         }
                     }
 
-                    if (isValid) {
-                        directUrlResult.value = Station(name = "Untitled", url = urlToTest)
+                    if (validUrl != null) {
+                        directUrlResult.value = Station(name = "Untitled", url = validUrl)
                         return@launch
-                    } else if (isIpAddress) {
+                    } else {
                         directUrlError.value = "No results found"
                         return@launch
                     }
@@ -276,6 +285,8 @@ class SearchViewModel(private val filesDir: File) : LightViewModel<Station?>() {
             false
         }
     }
+
+
 
     private fun sanitizeUrl(input: String): String {
         var url = input.trim()

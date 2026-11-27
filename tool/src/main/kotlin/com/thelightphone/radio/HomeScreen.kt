@@ -1,6 +1,7 @@
 // Initial build design compiled by Rob Ashcroft, August 2026
 package com.thelightphone.radio
 
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -88,6 +89,14 @@ class RadioViewModel(
     val availability = player.availability
     val error = player.error
     val isFavourite = MutableStateFlow(false)
+
+    enum class RadioPlaybackState {
+        Playing,
+        Paused,
+        Stopped
+    }
+
+    val playbackState = MutableStateFlow<RadioPlaybackState>(RadioPlaybackState.Stopped)
     
     // Tracks a station that has been selected but hasn't started playing yet
     private var pendingRecentStation: Station? = null
@@ -103,19 +112,85 @@ class RadioViewModel(
         observePlaybackForHistory()
     }
 
+    private var urlVariants = listOf<String>()
+    private var currentVariantIndex = 0
+
+    private fun prepareVariants(url: String) {
+        val trimmed = url.trim()
+        val hostWithoutProtocol = trimmed
+            .removePrefix("http://")
+            .removePrefix("https://")
+            .removeSuffix("/")
+            .removeSuffix(";")
+
+        val list = mutableListOf<String>()
+        list.add(trimmed)
+        list.add("https://$hostWithoutProtocol/;")
+        list.add("https://$hostWithoutProtocol")
+        list.add("http://$hostWithoutProtocol/;")
+        list.add("http://$hostWithoutProtocol")
+        
+        val sanitized = sanitizeUrl(trimmed)
+        list.add(sanitized)
+        list.add(sanitized.replace("http://", "https://"))
+        if (!sanitized.endsWith(";")) {
+            list.add(if (sanitized.endsWith("/")) "${sanitized};" else "${sanitized}/;")
+            list.add(if (sanitized.endsWith("/")) "${sanitized.replace("http://", "https://")};" else "${sanitized.replace("http://", "https://")}/;")
+        }
+        urlVariants = list.distinct()
+        currentVariantIndex = 0
+    }
+
+    private fun playCurrentVariant(name: String) {
+        if (currentVariantIndex >= urlVariants.size) return
+        val url = urlVariants[currentVariantIndex]
+        val sanitizedStation = Station(name, url)
+        
+        Log.d("RadioViewModel", "Playing variant [$currentVariantIndex/${urlVariants.size}] for $name | URL: $url")
+        stationName.value = name
+        streamUrl.value = url
+        
+        val item = LightAudioItem(
+            source = LightAudioSource.UrlSource(url),
+            metadata = LightMediaMetadata(title = name)
+        )
+        pendingRecentStation = sanitizedStation
+        
+        player.setMediaQueue(listOf(item))
+        player.play()
+        saveLastPlayed()
+        updateFavouriteState()
+        playbackState.value = RadioPlaybackState.Playing
+    }
+
     /** 
-     * Watches the player's "isPlaying" state. 
-     * Once a station actually starts playing, we move it from 'pending' to the official history.
+     * Watches the player's "isPlaying" state and error stream. 
+     * Once a station actually starts playing, we move it from 'pending' to history.
+     * When there is an error loading the stream, we automatically try the next variant URL.
      */
     private fun observePlaybackForHistory() {
         viewModelScope.launch {
             isPlaying.collect { playing ->
                 if (playing) {
+                    playbackState.value = RadioPlaybackState.Playing
                     pendingRecentStation?.let { station ->
-                        android.util.Log.d("RadioViewModel", "Proof of Play received for: ${station.name}. Adding to history.")
+                        Log.d("RadioViewModel", "Proof of Play received for: ${station.name}. Adding to history.")
                         addToRecent(station)
                         pendingRecentStation = null
                     }
+                } else {
+                    if (playbackState.value == RadioPlaybackState.Playing) {
+                        playbackState.value = RadioPlaybackState.Paused
+                    }
+                }
+            }
+        }
+        viewModelScope.launch {
+            error.collect { err ->
+                if (err != null && currentVariantIndex < urlVariants.size - 1) {
+                    Log.w("RadioViewModel", "Playback error encountered for variant $currentVariantIndex ($streamUrl). Trying next variant...")
+                    currentVariantIndex++
+                    playCurrentVariant(stationName.value)
                 }
             }
         }
@@ -214,21 +289,10 @@ class RadioViewModel(
     fun togglePlayback() {
         if (isPlaying.value) {
             player.pause()
+            playbackState.value = RadioPlaybackState.Paused
         } else {
-            val sanitizedUrl = sanitizeUrl(streamUrl.value)
-            val station = Station(stationName.value, sanitizedUrl)
-            val item = LightAudioItem(
-                source = LightAudioSource.UrlSource(station.url),
-                metadata = LightMediaMetadata(title = station.name)
-            )
-            
-            // Mark as pending - will be added to history once 'isPlaying' becomes true
-            pendingRecentStation = station
-            
-            player.setMediaQueue(listOf(item))
-            player.play()
-            saveLastPlayed()
-            updateFavouriteState()
+            prepareVariants(streamUrl.value)
+            playCurrentVariant(stationName.value)
         }
     }
 
@@ -253,25 +317,9 @@ class RadioViewModel(
 
     /** Transitions the player to a new station and starts playback immediately. */
     fun playStation(station: Station) {
-        val sanitizedUrl = sanitizeUrl(station.url)
-        val sanitizedStation = Station(station.name, sanitizedUrl)
-        
-        android.util.Log.d("RadioViewModel", "Playing: ${station.name} | URL: $sanitizedUrl")
-        stationName.value = station.name
-        streamUrl.value = sanitizedUrl
-        
-        val item = LightAudioItem(
-            source = LightAudioSource.UrlSource(sanitizedUrl),
-            metadata = LightMediaMetadata(title = station.name)
-        )
-        
-        // Mark as pending - history will only update if connection is successful
-        pendingRecentStation = sanitizedStation
-        
-        player.setMediaQueue(listOf(item))
-        player.play()
-        saveLastPlayed()
-        updateFavouriteState()
+        Log.d("RadioViewModel", "Playing station request: ${station.name} | URL: ${station.url}")
+        prepareVariants(station.url)
+        playCurrentVariant(station.name)
     }
 
     /**
