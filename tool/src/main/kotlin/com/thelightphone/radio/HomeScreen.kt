@@ -33,8 +33,6 @@ import com.thelightphone.sdk.audio.LightPlayerSpec
 import com.thelightphone.sdk.audio.LightAudioPlayerAvailability
 import com.thelightphone.sdk.audio.LightAudioSource
 import com.thelightphone.sdk.audio.LightMediaMetadata
-import com.thelightphone.sdk.callRemoteServiceMethod
-import com.thelightphone.sdk.shared.LightServiceMethod
 import com.thelightphone.sdk.ui.*
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.lifecycle.viewModelScope
@@ -45,12 +43,6 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.serializer
-
-private object OpenBluetoothSettings : LightServiceMethod.CustomServiceMethod<Unit, Unit>() {
-    override val id = "OpenBluetoothSettings"
-    override val requestSerializer = serializer<Unit>()
-    override val responseSerializer = serializer<Unit>()
-}
 
 /**
  * Data model for a radio station.
@@ -419,12 +411,7 @@ class RadioViewModel(
         saveLastPlayed()
     }
 
-    fun openBluetooth() {
-        viewModelScope.launch {
-            // This relies on the LightOS server implementing this custom bridge method.
-            callRemoteServiceMethod(OpenBluetoothSettings, Unit)
-        }
-    }
+
 
     override fun onBackPressed(): Boolean {
         return false
@@ -543,8 +530,7 @@ class HomeScreen(private val sealedActivity: SealedLightActivity) : LightScreen<
                 LightBottomBar(
                     items = listOf(
                         LightBarButton.LightIcon(LightIcons.SEARCH, onClick = viewModel::openSearch),
-                        LightBarButton.LightIcon(LightIcons.LIST, onClick = viewModel::openLibrary),
-                        LightBarButton.LightIcon(LightIcons.BLUETOOTH, onClick = viewModel::openBluetooth)
+                        LightBarButton.LightIcon(LightIcons.LIST, onClick = viewModel::openLibrary)
                     )
                 )
             }
